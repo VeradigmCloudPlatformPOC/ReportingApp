@@ -7,11 +7,12 @@
  *
  * Channels supported: Slack, Microsoft Teams
  *
- * @version v8-agent
+ * @version v9-dynamic-queries
  * @author VM Performance Monitoring Team
  */
 
 const { ActivityHandler } = require('botbuilder');
+const { OpenAIClient, AzureKeyCredential } = require('@azure/openai');
 const { createAgentService } = require('../services/agentService');
 const { createConversationState } = require('../services/conversationState');
 const { channelAdapter } = require('./channelAdapter');
@@ -71,7 +72,21 @@ class VMPerfBot extends ActivityHandler {
         }
 
         try {
-            this.agentService = createAgentService(this.config, this.orchestrationClient);
+            // Create Azure OpenAI client for dynamic query generation
+            let aiClient = null;
+            if (this.config.openai?.endpoint && this.config.openai?.apiKey) {
+                aiClient = new OpenAIClient(
+                    this.config.openai.endpoint,
+                    new AzureKeyCredential(this.config.openai.apiKey)
+                );
+                // Store deployment name for use in API calls
+                aiClient.deploymentName = this.config.openai.deploymentName || 'gpt-4';
+                console.log('Azure OpenAI client created for dynamic query generation');
+            } else {
+                console.warn('Azure OpenAI not configured - dynamic query tools will not be available');
+            }
+
+            this.agentService = createAgentService(this.config, this.orchestrationClient, aiClient);
             await this.agentService.initialize();
             console.log('Agent service initialized successfully');
         } catch (error) {

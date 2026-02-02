@@ -290,9 +290,10 @@ class AgentService {
  *
  * @param {Object} config - Configuration object
  * @param {Object} orchestrationClient - Orchestration client for tool execution
+ * @param {Object} aiClient - Optional Azure OpenAI client for dynamic query generation
  * @returns {AgentService} Configured agent service
  */
-function createAgentService(config, orchestrationClient) {
+function createAgentService(config, orchestrationClient, aiClient = null) {
     const agentService = new AgentService({
         projectEndpoint: config.aiFoundry?.projectEndpoint,
         agentId: config.aiFoundry?.agentId
@@ -301,7 +302,7 @@ function createAgentService(config, orchestrationClient) {
     // Register all tool handlers
     if (orchestrationClient) {
         const tools = require('../tools');
-        tools.registerAllTools(agentService, orchestrationClient);
+        tools.registerAllTools(agentService, orchestrationClient, aiClient);
     }
 
     return agentService;

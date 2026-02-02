@@ -310,6 +310,148 @@ class OrchestrationClient {
             return false;
         }
     }
+
+    // =========================================================================
+    // DYNAMIC QUERY METHODS (v9)
+    // =========================================================================
+
+    /**
+     * Execute a dynamic KQL query against Log Analytics.
+     *
+     * @param {string} query - KQL query to execute
+     * @param {Object} options - Execution options
+     * @param {string} options.subscriptionId - Target subscription
+     * @param {string} options.workspaceId - Log Analytics workspace ID
+     * @param {string} options.tenantId - Azure AD tenant ID
+     * @param {number} options.maxResults - Maximum results (default: 1000)
+     * @param {number} options.timeoutMs - Query timeout in ms (default: 60000)
+     * @param {string} options.userId - User who initiated the query
+     * @param {string} options.channel - Channel (slack, teams, api)
+     * @returns {Promise<Object>} Query results
+     */
+    async executeDynamicKql(query, options = {}) {
+        try {
+            const response = await this.client.post('/api/query/dynamic-kql', {
+                query,
+                subscriptionId: options.subscriptionId,
+                workspaceId: options.workspaceId,
+                tenantId: options.tenantId,
+                maxResults: options.maxResults || 1000,
+                timeoutMs: options.timeoutMs || 60000,
+                userId: options.userId,
+                channel: options.channel || 'slack'
+            }, {
+                timeout: Math.min(options.timeoutMs || 60000, 300000) + 5000 // Query timeout + buffer
+            });
+
+            return response.data;
+        } catch (error) {
+            if (error.response?.data) {
+                return error.response.data;
+            }
+            return {
+                success: false,
+                error: 'NETWORK_ERROR',
+                message: error.message
+            };
+        }
+    }
+
+    /**
+     * Execute a dynamic Resource Graph query.
+     *
+     * @param {string} query - Resource Graph query to execute
+     * @param {Object} options - Execution options
+     * @param {Array<string>} options.subscriptionIds - Subscriptions to query
+     * @param {string} options.tenantId - Azure AD tenant ID
+     * @param {number} options.maxResults - Maximum results (default: 1000)
+     * @param {string} options.userId - User who initiated the query
+     * @param {string} options.channel - Channel (slack, teams, api)
+     * @returns {Promise<Object>} Query results
+     */
+    async executeDynamicResourceGraph(query, options = {}) {
+        try {
+            const response = await this.client.post('/api/query/dynamic-resourcegraph', {
+                query,
+                subscriptionIds: options.subscriptionIds,
+                tenantId: options.tenantId,
+                maxResults: options.maxResults || 1000,
+                userId: options.userId,
+                channel: options.channel || 'slack'
+            }, {
+                timeout: 65000 // 65 seconds
+            });
+
+            return response.data;
+        } catch (error) {
+            if (error.response?.data) {
+                return error.response.data;
+            }
+            return {
+                success: false,
+                error: 'NETWORK_ERROR',
+                message: error.message
+            };
+        }
+    }
+
+    /**
+     * Format query results for a specific channel.
+     *
+     * @param {Object} results - Query results to format
+     * @param {string} format - Output format ('slack' or 'email')
+     * @param {number} maxRows - Maximum rows to include
+     * @returns {Promise<Object>} Formatted result
+     */
+    async formatQueryResults(results, format = 'slack', maxRows = 20) {
+        try {
+            const response = await this.client.post('/api/query/format', {
+                results,
+                format,
+                maxRows
+            });
+            return response.data;
+        } catch (error) {
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Send dynamic query results via email.
+     * Used when results exceed the threshold for Slack display (>50 rows).
+     *
+     * @param {Object} options - Email options
+     * @param {Object} options.results - Query results object
+     * @param {string} options.originalQuery - The generated query
+     * @param {string} options.queryType - 'kql' or 'resourcegraph'
+     * @param {string} options.userEmail - Recipient email address
+     * @param {string} options.userName - User's display name
+     * @param {string} options.synthesis - AI-generated analysis summary
+     * @returns {Promise<Object>} Send result
+     */
+    async sendResultsEmail(options) {
+        try {
+            const response = await this.client.post('/api/query/email-results', {
+                results: options.results,
+                originalQuery: options.originalQuery,
+                queryType: options.queryType,
+                userEmail: options.userEmail,
+                userName: options.userName,
+                synthesis: options.synthesis
+            });
+            return response.data;
+        } catch (error) {
+            console.error('Failed to send results email:', error.message);
+            return {
+                success: false,
+                error: 'EMAIL_FAILED',
+                message: error.message
+            };
+        }
+    }
 }
 
 module.exports = { OrchestrationClient, initializeServices };

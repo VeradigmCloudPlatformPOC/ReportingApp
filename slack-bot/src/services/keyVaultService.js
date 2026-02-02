@@ -22,7 +22,7 @@
  *   - {TenantName}-ClientId (per-tenant)
  *   - {TenantName}-ClientSecret (per-tenant)
  *
- * @version v8-agent
+ * @version v9-dynamic-queries
  * @author VM Performance Monitoring Team
  */
 
@@ -47,6 +47,7 @@ const SECRET_NAMES = {
     // Existing OpenAI secrets in vmperf-kv-18406
     OPENAI_ENDPOINT: 'OpenAIEndpoint',
     OPENAI_API_KEY: 'OpenAIApiKey',
+    OPENAI_DEPLOYMENT_NAME: 'OpenAIDeploymentName',
     // Bot Framework credentials (for Teams)
     BOT_APP_ID: 'Bot-MicrosoftAppId',
     BOT_APP_PASSWORD: 'Bot-MicrosoftAppPassword',
@@ -148,14 +149,16 @@ async function getSlackCredentials() {
  * @returns {Promise<Object>} OpenAI credentials object
  */
 async function getOpenAICredentials() {
-    const [endpoint, apiKey] = await Promise.all([
+    const [endpoint, apiKey, deploymentName] = await Promise.all([
         getSecret(SECRET_NAMES.OPENAI_ENDPOINT),
-        getSecret(SECRET_NAMES.OPENAI_API_KEY)
+        getSecret(SECRET_NAMES.OPENAI_API_KEY),
+        getSecret(SECRET_NAMES.OPENAI_DEPLOYMENT_NAME).catch(() => 'gpt-4') // Default to gpt-4
     ]);
 
     return {
         endpoint,
-        apiKey
+        apiKey,
+        deploymentName
     };
 }
 

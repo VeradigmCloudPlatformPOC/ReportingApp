@@ -5,7 +5,7 @@
  * Tools are functions that the AI agent can call to interact
  * with the VM Performance orchestrator APIs.
  *
- * @version v8-agent
+ * @version v9-dynamic-queries
  */
 
 const createTriggerReportTool = require('./triggerReportTool');
@@ -14,14 +14,23 @@ const createSearchVMsTool = require('./searchVMsTool');
 const createInvestigateVMTool = require('./investigateVMTool');
 const createQueryInventoryTool = require('./queryInventoryTool');
 const createCrossTenantSummaryTool = require('./crossTenantSummaryTool');
+const {
+    DYNAMIC_QUERY_TOOL_DEFINITION,
+    GENERATE_KQL_TOOL_DEFINITION,
+    GENERATE_RESOURCEGRAPH_TOOL_DEFINITION,
+    createDynamicQueryTool,
+    createGenerateKqlTool,
+    createGenerateResourceGraphTool
+} = require('./dynamicQueryTool');
 
 /**
  * Register all tools with the agent service.
  *
  * @param {AgentService} agentService - The agent service instance
  * @param {Object} orchestrationClient - The orchestration client for API calls
+ * @param {Object} aiClient - Optional Azure OpenAI client for dynamic query generation
  */
-function registerAllTools(agentService, orchestrationClient) {
+function registerAllTools(agentService, orchestrationClient, aiClient = null) {
     // Trigger Performance Report Tool
     agentService.registerToolHandler(
         'trigger_performance_report',
@@ -57,6 +66,31 @@ function registerAllTools(agentService, orchestrationClient) {
         'get_cross_tenant_summary',
         createCrossTenantSummaryTool(orchestrationClient)
     );
+
+    // Dynamic Query Tools (require AI client for query generation)
+    if (aiClient) {
+        // Main dynamic query tool - handles both KQL and Resource Graph
+        agentService.registerToolHandler(
+            'execute_dynamic_query',
+            createDynamicQueryTool(orchestrationClient, aiClient)
+        );
+
+        // KQL query generation only (no execution)
+        agentService.registerToolHandler(
+            'generate_kql_query',
+            createGenerateKqlTool(aiClient)
+        );
+
+        // Resource Graph query generation only (no execution)
+        agentService.registerToolHandler(
+            'generate_resourcegraph_query',
+            createGenerateResourceGraphTool(aiClient)
+        );
+
+        console.log('Dynamic query tools registered (AI-powered query generation enabled)');
+    } else {
+        console.warn('Dynamic query tools NOT registered - AI client not provided');
+    }
 
     console.log('All agent tools registered successfully');
 }
@@ -189,7 +223,11 @@ function getToolDefinitions() {
                     properties: {}
                 }
             }
-        }
+        },
+        // Dynamic Query Tools (v9)
+        DYNAMIC_QUERY_TOOL_DEFINITION,
+        GENERATE_KQL_TOOL_DEFINITION,
+        GENERATE_RESOURCEGRAPH_TOOL_DEFINITION
     ];
 }
 

@@ -1286,6 +1286,334 @@ app.get('/api/reports/:runId/metadata', async (req, res) => {
 });
 
 // =============================================================================
+// DYNAMIC QUERY ENDPOINTS (v9)
+// =============================================================================
+const { executeDynamicKqlQuery, executeDynamicResourceGraphQuery, formatQueryResults } = require('./services/dynamicQueryExecutor');
+
+/**
+ * POST /api/query/dynamic-kql
+ * Execute an AI-generated KQL query against Log Analytics.
+ *
+ * Request body:
+ * - query: The KQL query to execute
+ * - subscriptionId: (optional) Target subscription
+ * - workspaceId: (optional) Log Analytics workspace ID
+ * - tenantId: (optional) Azure AD tenant ID for OAuth
+ * - maxResults: (optional) Maximum results to return (default: 1000, max: 10000)
+ * - timeoutMs: (optional) Query timeout in milliseconds (default: 60000, max: 300000)
+ *
+ * Response:
+ * - success: boolean
+ * - query: The sanitized query that was executed
+ * - rowCount: Number of rows returned
+ * - columns: Array of column names
+ * - results: Array of result objects
+ * - warnings: Array of validation warnings
+ * - executionTimeMs: Execution time in milliseconds
+ */
+app.post('/api/query/dynamic-kql', async (req, res) => {
+    try {
+        const secrets = await loadSecrets();
+        const { query, subscriptionId, workspaceId, tenantId, maxResults, timeoutMs, userId, channel } = req.body;
+
+        if (!query) {
+            return res.status(400).json({
+                success: false,
+                error: 'MISSING_QUERY',
+                message: 'Query is required'
+            });
+        }
+
+        console.log(`[DynamicKQL] Executing query from ${channel || 'api'} user ${userId || 'unknown'}`);
+
+        const result = await executeDynamicKqlQuery(
+            query,
+            secrets,
+            { subscriptionId, workspaceId, tenantId, maxResults, timeoutMs },
+            { userId, channel }
+        );
+
+        if (!result.success) {
+            return res.status(400).json(result);
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('[DynamicKQL] Unexpected error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'INTERNAL_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/query/dynamic-resourcegraph
+ * Execute an AI-generated Resource Graph query.
+ *
+ * Request body:
+ * - query: The Resource Graph query to execute
+ * - subscriptionIds: (optional) Array of subscription IDs to query
+ * - tenantId: (optional) Azure AD tenant ID
+ * - maxResults: (optional) Maximum results (default: 1000)
+ *
+ * Response:
+ * - success: boolean
+ * - query: The sanitized query that was executed
+ * - rowCount: Number of rows returned
+ * - results: Array of result objects
+ * - warnings: Array of validation warnings
+ * - executionTimeMs: Execution time in milliseconds
+ */
+app.post('/api/query/dynamic-resourcegraph', async (req, res) => {
+    try {
+        const secrets = await loadSecrets();
+        const { query, subscriptionIds, tenantId, maxResults, userId, channel } = req.body;
+
+        if (!query) {
+            return res.status(400).json({
+                success: false,
+                error: 'MISSING_QUERY',
+                message: 'Query is required'
+            });
+        }
+
+        console.log(`[DynamicRG] Executing query from ${channel || 'api'} user ${userId || 'unknown'}`);
+
+        const result = await executeDynamicResourceGraphQuery(
+            query,
+            secrets,
+            { subscriptionIds, tenantId, maxResults },
+            { userId, channel }
+        );
+
+        if (!result.success) {
+            return res.status(400).json(result);
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('[DynamicRG] Unexpected error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'INTERNAL_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/query/format
+ * Format query results for a specific channel (Slack or Email).
+ * Useful when results need to be reformatted for different delivery.
+ */
+app.post('/api/query/format', (req, res) => {
+    const { results, format, maxRows } = req.body;
+
+    if (!results) {
+        return res.status(400).json({
+            success: false,
+            error: 'MISSING_RESULTS',
+            message: 'Results object is required'
+        });
+    }
+
+    const formatted = formatQueryResults(results, format || 'slack', maxRows || 20);
+    res.json({
+        success: true,
+        formatted,
+        format: format || 'slack'
+    });
+});
+
+/**
+ * POST /api/query/email-results
+ * Send dynamic query results via email.
+ * Used when query results exceed the Slack message limit (>50 rows).
+ */
+app.post('/api/query/email-results', async (req, res) => {
+    const {
+        results,
+        originalQuery,
+        queryType,
+        userEmail,
+        userName,
+        synthesis
+    } = req.body;
+
+    if (!results || !userEmail) {
+        return res.status(400).json({
+            success: false,
+            error: 'MISSING_PARAMETERS',
+            message: 'results and userEmail are required'
+        });
+    }
+
+    try {
+        // Import email service
+        const { sendEmail } = require('./services/emailService');
+
+        // Format results as HTML table
+        const htmlContent = generateQueryResultsEmail({
+            results,
+            originalQuery,
+            queryType,
+            synthesis,
+            userName: userName || 'User'
+        });
+
+        // Send email
+        await sendEmail({
+            to: userEmail,
+            subject: `VM Performance Query Results - ${new Date().toLocaleDateString()}`,
+            html: htmlContent,
+            reportType: 'dynamic-query'
+        }, secrets);
+
+        res.json({
+            success: true,
+            message: `Results sent to ${userEmail}`,
+            rowCount: results.rowCount || results.results?.length || 0
+        });
+
+    } catch (error) {
+        console.error('[Email Results] Error:', error.message);
+        res.status(500).json({
+            success: false,
+            error: 'EMAIL_FAILED',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * Generate HTML email content for query results.
+ *
+ * @param {Object} data - Query result data
+ * @returns {string} HTML email content
+ */
+function generateQueryResultsEmail(data) {
+    const { results, originalQuery, queryType, synthesis, userName } = data;
+    const rows = results.results || [];
+    const columns = results.columns || (rows.length > 0 ? Object.keys(rows[0]) : []);
+    const rowCount = results.rowCount || rows.length;
+
+    let html = `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #0078d4 0%, #00bcf2 100%); color: white; padding: 30px; border-radius: 8px 8px 0 0; }
+        .header h1 { margin: 0 0 10px 0; font-size: 24px; }
+        .header p { margin: 0; opacity: 0.9; }
+        .content { padding: 30px; }
+        .section { margin-bottom: 25px; }
+        .section-title { font-size: 16px; font-weight: 600; color: #333; margin-bottom: 10px; border-bottom: 2px solid #0078d4; padding-bottom: 5px; }
+        .synthesis { background: #f8f9fa; border-left: 4px solid #0078d4; padding: 15px; margin: 15px 0; }
+        .query-box { background: #2d2d2d; color: #d4d4d4; padding: 15px; border-radius: 4px; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th { background: #0078d4; color: white; padding: 12px 8px; text-align: left; font-size: 12px; }
+        td { padding: 10px 8px; border-bottom: 1px solid #eee; font-size: 12px; }
+        tr:hover { background: #f5f5f5; }
+        .footer { padding: 20px 30px; background: #f8f9fa; border-radius: 0 0 8px 8px; font-size: 12px; color: #666; }
+        .stats { display: flex; gap: 30px; margin-bottom: 20px; }
+        .stat { text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #0078d4; }
+        .stat-label { font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>VM Performance Query Results</h1>
+            <p>Generated for ${userName} on ${new Date().toLocaleString()}</p>
+        </div>
+        <div class="content">
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-value">${rowCount}</div>
+                    <div class="stat-label">Total Results</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">${columns.length}</div>
+                    <div class="stat-label">Columns</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">${queryType?.toUpperCase() || 'QUERY'}</div>
+                    <div class="stat-label">Query Type</div>
+                </div>
+            </div>`;
+
+    // Add synthesis if provided
+    if (synthesis) {
+        html += `
+            <div class="section">
+                <div class="section-title">AI Analysis Summary</div>
+                <div class="synthesis">${synthesis.replace(/\n/g, '<br>')}</div>
+            </div>`;
+    }
+
+    // Add query if provided
+    if (originalQuery) {
+        html += `
+            <div class="section">
+                <div class="section-title">Query Executed</div>
+                <div class="query-box">${originalQuery}</div>
+            </div>`;
+    }
+
+    // Add results table
+    html += `
+            <div class="section">
+                <div class="section-title">Results (${rowCount} rows)</div>
+                <table>
+                    <thead>
+                        <tr>
+                            ${columns.map(col => `<th>${col}</th>`).join('')}
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+    // Add rows (limit to 500 for email)
+    const displayRows = rows.slice(0, 500);
+    for (const row of displayRows) {
+        html += `<tr>`;
+        for (const col of columns) {
+            const value = row[col];
+            const displayValue = value === null || value === undefined ? '-' :
+                typeof value === 'number' ? value.toFixed(2) :
+                String(value);
+            html += `<td>${displayValue}</td>`;
+        }
+        html += `</tr>`;
+    }
+
+    html += `
+                    </tbody>
+                </table>`;
+
+    if (rowCount > 500) {
+        html += `<p style="color: #666; font-style: italic; margin-top: 10px;">Showing first 500 of ${rowCount} results.</p>`;
+    }
+
+    html += `
+            </div>
+        </div>
+        <div class="footer">
+            <p>This report was generated by the VM Performance Monitoring Bot.</p>
+            <p>For questions, contact your Azure administrator.</p>
+        </div>
+    </div>
+</body>
+</html>`;
+
+    return html;
+}
+
+// =============================================================================
 // SERVER STARTUP
 // =============================================================================
 // Listen on all interfaces (0.0.0.0) for container compatibility
