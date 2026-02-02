@@ -302,20 +302,30 @@ function parseLogAnalyticsResults(data) {
  * @returns {string} Formatted output
  */
 function formatQueryResults(queryResult, format = 'slack', maxRows = 20) {
-    if (!queryResult.success) {
+    // Handle explicit error results
+    if (queryResult.success === false) {
         if (format === 'slack') {
             return `*Error:* ${queryResult.error}\n${queryResult.message}`;
         }
         return `<p><strong>Error:</strong> ${queryResult.error}</p><p>${queryResult.message}</p>`;
     }
 
-    const results = queryResult.results.slice(0, maxRows);
-    const columns = queryResult.columns || Object.keys(results[0] || {});
+    // Handle results array (either from queryResult.results or queryResult itself)
+    const resultsArray = queryResult.results || [];
+    const results = resultsArray.slice(0, maxRows);
+    const columns = queryResult.columns || (results.length > 0 ? Object.keys(results[0]) : []);
+
+    // Normalize queryResult to have all expected fields
+    const normalizedResult = {
+        rowCount: queryResult.rowCount || results.length,
+        executionTimeMs: queryResult.executionTimeMs || 0,
+        truncated: queryResult.truncated || (resultsArray.length > maxRows)
+    };
 
     if (format === 'slack') {
-        return formatForSlack(results, columns, queryResult);
+        return formatForSlack(results, columns, normalizedResult);
     } else {
-        return formatForEmail(results, columns, queryResult);
+        return formatForEmail(results, columns, normalizedResult);
     }
 }
 

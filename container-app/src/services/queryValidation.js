@@ -38,7 +38,7 @@ const ALLOWED_KQL_TABLES = [
  * These patterns are blocked regardless of context.
  */
 const DANGEROUS_KQL_PATTERNS = [
-    { pattern: /\.delete\s*\(/i, description: 'delete operation' },
+    { pattern: /\.delete\b/i, description: 'delete operation' },
     { pattern: /\.set\s+/i, description: 'set operation' },
     { pattern: /\.append\s+/i, description: 'append operation' },
     { pattern: /\.ingest\s+/i, description: 'ingest operation' },
@@ -49,7 +49,8 @@ const DANGEROUS_KQL_PATTERNS = [
     { pattern: /external_data\s*\(/i, description: 'external data access' },
     { pattern: /\.set-or-append\s+/i, description: 'set-or-append operation' },
     { pattern: /\.set-or-replace\s+/i, description: 'set-or-replace operation' },
-    { pattern: /materialize\s*\(/i, description: 'materialize (resource intensive)' }
+    { pattern: /materialize\s*\(/i, description: 'materialize (resource intensive)' },
+    { pattern: /\bunion\s+\*/i, description: 'unrestricted union (security risk)' }
 ];
 
 /**
@@ -232,6 +233,19 @@ function validateResourceGraphQuery(query, options = {}) {
         .replace(/\/\/[^\r\n]*/g, ' ');
 
     // Resource Graph is read-only by design, but check for suspicious patterns
+    const dangerousPatterns = [
+        { pattern: /\bupdate\s+/i, description: 'update operation' },
+        { pattern: /\bdelete\s+/i, description: 'delete operation' },
+        { pattern: /\binsert\s+/i, description: 'insert operation' },
+        { pattern: /\bmodify\s+/i, description: 'modify operation' }
+    ];
+
+    for (const { pattern, description } of dangerousPatterns) {
+        if (pattern.test(queryWithoutComments)) {
+            errors.push(`Dangerous operation detected: ${description}`);
+        }
+    }
+
     const suspiciousPatterns = [
         { pattern: /;\s*\w+/i, description: 'multiple statements' },
         { pattern: /union\s+\*/i, description: 'unrestricted union' }
@@ -300,14 +314,17 @@ function createAuditLogEntry(params) {
 
     return {
         timestamp: new Date().toISOString(),
+        query: query, // Include full query for audit
         queryType,
         queryHash: hashQuery(query),
         queryLength: query.length,
         userId,
         channel,
-        valid: validationResult.valid,
-        errors: validationResult.errors,
-        warnings: validationResult.warnings
+        validationResult: {
+            valid: validationResult.valid,
+            errors: validationResult.errors || [],
+            warnings: validationResult.warnings || []
+        }
     };
 }
 
