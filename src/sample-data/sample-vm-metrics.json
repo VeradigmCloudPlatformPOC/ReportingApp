@@ -1,0 +1,326 @@
+{
+  "description": "Sample VM metrics data for testing and development",
+  "analysisPeriod": "2024-01-15 to 2024-01-22",
+  "reportDate": "2024-01-22",
+  "vms": [
+    {
+      "vmName": "prod-web-01",
+      "resourceId": "/subscriptions/12345/resourceGroups/production-rg/providers/Microsoft.Compute/virtualMachines/prod-web-01",
+      "resourceGroup": "production-rg",
+      "subscriptionId": "12345",
+      "currentSku": "Standard_D4s_v3",
+      "currentSkuDetails": {
+        "vcpus": 4,
+        "memoryGb": 16,
+        "maxIops": 6400,
+        "monthlyCost": 140.16
+      },
+      "metrics": {
+        "cpu": {
+          "max": 35.2,
+          "avg": 18.5,
+          "p95": 28.4
+        },
+        "memory": {
+          "max": 42.8,
+          "avg": 32.1,
+          "p95": 38.6
+        },
+        "diskIOPS": {
+          "max": 1850,
+          "avg": 980,
+          "p95": 1520
+        }
+      },
+      "recommendation": {
+        "action": "DOWNSIZE",
+        "recommendedSku": "Standard_D2s_v3",
+        "recommendedSkuDetails": {
+          "vcpus": 2,
+          "memoryGb": 8,
+          "maxIops": 3200,
+          "monthlyCost": 70.08
+        },
+        "justification": "CPU utilization consistently below 30%, memory below 45%. Current SKU is oversized for workload requirements. Downsize to D2s_v3 maintains adequate headroom while reducing costs.",
+        "monthlyS avings": 70.08,
+        "annualSavings": 840.96,
+        "savingsPercent": 50,
+        "riskLevel": "LOW",
+        "downtime": "5-10 minutes",
+        "status": "UNDERUTILIZED"
+      }
+    },
+    {
+      "vmName": "prod-db-01",
+      "resourceId": "/subscriptions/12345/resourceGroups/production-rg/providers/Microsoft.Compute/virtualMachines/prod-db-01",
+      "resourceGroup": "production-rg",
+      "subscriptionId": "12345",
+      "currentSku": "Standard_E8s_v3",
+      "currentSkuDetails": {
+        "vcpus": 8,
+        "memoryGb": 64,
+        "maxIops": 12800,
+        "monthlyCost": 438.00
+      },
+      "metrics": {
+        "cpu": {
+          "max": 88.4,
+          "avg": 72.3,
+          "p95": 84.2
+        },
+        "memory": {
+          "max": 91.5,
+          "avg": 81.7,
+          "p95": 88.9
+        },
+        "diskIOPS": {
+          "max": 11200,
+          "avg": 8400,
+          "p95": 10500
+        }
+      },
+      "recommendation": {
+        "action": "UPSIZE",
+        "recommendedSku": "Standard_E16s_v3",
+        "recommendedSkuDetails": {
+          "vcpus": 16,
+          "memoryGb": 128,
+          "maxIops": 25600,
+          "monthlyCost": 876.00
+        },
+        "justification": "CPU and memory consistently above 80%, approaching capacity limits. P95 values indicate frequent resource constraints. Database workload requires additional capacity to prevent performance degradation.",
+        "monthlySavings": -438.00,
+        "annualSavings": -5256.00,
+        "savingsPercent": -100,
+        "riskLevel": "HIGH",
+        "downtime": "10-15 minutes",
+        "status": "OVERUTILIZED"
+      }
+    },
+    {
+      "vmName": "dev-test-web-01",
+      "resourceId": "/subscriptions/12345/resourceGroups/development-rg/providers/Microsoft.Compute/virtualMachines/dev-test-web-01",
+      "resourceGroup": "development-rg",
+      "subscriptionId": "12345",
+      "currentSku": "Standard_D8s_v3",
+      "currentSkuDetails": {
+        "vcpus": 8,
+        "memoryGb": 32,
+        "maxIops": 12800,
+        "monthlyCost": 280.32
+      },
+      "metrics": {
+        "cpu": {
+          "max": 12.8,
+          "avg": 6.2,
+          "p95": 9.4
+        },
+        "memory": {
+          "max": 22.1,
+          "avg": 15.3,
+          "p95": 18.7
+        },
+        "diskIOPS": {
+          "max": 450,
+          "avg": 220,
+          "p95": 380
+        }
+      },
+      "recommendation": {
+        "action": "DOWNSIZE",
+        "recommendedSku": "Standard_B2ms",
+        "recommendedSkuDetails": {
+          "vcpus": 2,
+          "memoryGb": 8,
+          "maxIops": 1920,
+          "monthlyCost": 60.74
+        },
+        "justification": "Development environment with minimal utilization. CPU below 15%, memory below 25%. B-series burstable VM provides cost-effective solution for non-production workloads with intermittent usage patterns.",
+        "monthlySavings": 219.58,
+        "annualSavings": 2634.96,
+        "savingsPercent": 78,
+        "riskLevel": "LOW",
+        "downtime": "5-10 minutes",
+        "status": "UNDERUTILIZED"
+      }
+    },
+    {
+      "vmName": "prod-app-02",
+      "resourceId": "/subscriptions/12345/resourceGroups/production-rg/providers/Microsoft.Compute/virtualMachines/prod-app-02",
+      "resourceGroup": "production-rg",
+      "subscriptionId": "12345",
+      "currentSku": "Standard_D4s_v3",
+      "currentSkuDetails": {
+        "vcpus": 4,
+        "memoryGb": 16,
+        "maxIops": 6400,
+        "monthlyCost": 140.16
+      },
+      "metrics": {
+        "cpu": {
+          "max": 68.2,
+          "avg": 52.4,
+          "p95": 62.8
+        },
+        "memory": {
+          "max": 71.5,
+          "avg": 58.3,
+          "p95": 67.2
+        },
+        "diskIOPS": {
+          "max": 3200,
+          "avg": 2100,
+          "p95": 2850
+        }
+      },
+      "recommendation": {
+        "action": "MAINTAIN",
+        "recommendedSku": "Standard_D4s_v3",
+        "recommendedSkuDetails": {
+          "vcpus": 4,
+          "memoryGb": 16,
+          "maxIops": 6400,
+          "monthlyCost": 140.16
+        },
+        "justification": "VM is optimally sized. CPU P95 at 63%, memory P95 at 67% - within target utilization range of 40-70%. Provides adequate headroom for traffic spikes while maintaining cost efficiency.",
+        "monthlySavings": 0,
+        "annualSavings": 0,
+        "savingsPercent": 0,
+        "riskLevel": "LOW",
+        "downtime": "N/A",
+        "status": "OPTIMALLY_SIZED"
+      }
+    },
+    {
+      "vmName": "prod-batch-01",
+      "resourceId": "/subscriptions/12345/resourceGroups/production-rg/providers/Microsoft.Compute/virtualMachines/prod-batch-01",
+      "resourceGroup": "production-rg",
+      "subscriptionId": "12345",
+      "currentSku": "Standard_F16s_v2",
+      "currentSkuDetails": {
+        "vcpus": 16,
+        "memoryGb": 32,
+        "maxIops": 25600,
+        "monthlyCost": 524.16
+      },
+      "metrics": {
+        "cpu": {
+          "max": 95.8,
+          "avg": 38.2,
+          "p95": 88.4
+        },
+        "memory": {
+          "max": 48.5,
+          "avg": 28.7,
+          "p95": 42.3
+        },
+        "diskIOPS": {
+          "max": 15200,
+          "avg": 4200,
+          "p95": 12800
+        }
+      },
+      "recommendation": {
+        "action": "INVESTIGATE",
+        "recommendedSku": "Standard_F16s_v2",
+        "recommendedSkuDetails": {
+          "vcpus": 16,
+          "memoryGb": 32,
+          "maxIops": 25600,
+          "monthlyCost": 524.16
+        },
+        "justification": "Batch processing workload with highly variable utilization patterns. High CPU spikes (95%) during batch runs, but low average (38%). Consider scheduling optimization, spot instances, or Azure Batch for cost-effective burst capacity.",
+        "monthlySavings": 0,
+        "annualSavings": 0,
+        "savingsPercent": 0,
+        "riskLevel": "MEDIUM",
+        "downtime": "N/A",
+        "status": "REQUIRES_INVESTIGATION"
+      }
+    },
+    {
+      "vmName": "staging-api-01",
+      "resourceId": "/subscriptions/12345/resourceGroups/staging-rg/providers/Microsoft.Compute/virtualMachines/staging-api-01",
+      "resourceGroup": "staging-rg",
+      "subscriptionId": "12345",
+      "currentSku": "Standard_D16s_v3",
+      "currentSkuDetails": {
+        "vcpus": 16,
+        "memoryGb": 64,
+        "maxIops": 25600,
+        "monthlyCost": 560.64
+      },
+      "metrics": {
+        "cpu": {
+          "max": 18.3,
+          "avg": 8.5,
+          "p95": 14.2
+        },
+        "memory": {
+          "max": 31.2,
+          "avg": 18.9,
+          "p95": 26.4
+        },
+        "diskIOPS": {
+          "max": 1200,
+          "avg": 450,
+          "p95": 950
+        }
+      },
+      "recommendation": {
+        "action": "DOWNSIZE",
+        "recommendedSku": "Standard_D4s_v3",
+        "recommendedSkuDetails": {
+          "vcpus": 4,
+          "memoryGb": 16,
+          "maxIops": 6400,
+          "monthlyCost": 140.16
+        },
+        "justification": "Staging environment significantly over-provisioned. CPU below 20%, memory below 35%. Downsize from D16 to D4 maintains adequate capacity for testing while achieving 75% cost reduction.",
+        "monthlySavings": 420.48,
+        "annualSavings": 5045.76,
+        "savingsPercent": 75,
+        "riskLevel": "LOW",
+        "downtime": "5-10 minutes",
+        "status": "UNDERUTILIZED"
+      }
+    }
+  ],
+  "summary": {
+    "totalVMs": 6,
+    "actionRequired": 4,
+    "breakdown": {
+      "underutilized": 3,
+      "overutilized": 1,
+      "optimallySized": 1,
+      "requiresInvestigation": 1
+    },
+    "financialSummary": {
+      "currentMonthlyCost": 2083.44,
+      "recommendedMonthlyCost": 1753.52,
+      "monthlySavings": 329.92,
+      "annualSavings": 3959.04,
+      "savingsPercent": 15.8
+    },
+    "topOpportunities": [
+      {
+        "rank": 1,
+        "vmName": "staging-api-01",
+        "action": "Downsize to Standard_D4s_v3",
+        "monthlySavings": 420.48
+      },
+      {
+        "rank": 2,
+        "vmName": "dev-test-web-01",
+        "action": "Downsize to Standard_B2ms",
+        "monthlySavings": 219.58
+      },
+      {
+        "rank": 3,
+        "vmName": "prod-web-01",
+        "action": "Downsize to Standard_D2s_v3",
+        "monthlySavings": 70.08
+      }
+    ]
+  }
+}

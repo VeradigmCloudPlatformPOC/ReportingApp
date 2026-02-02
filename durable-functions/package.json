@@ -1,0 +1,24 @@
+{
+  "name": "vm-performance-monitoring-durable-functions",
+  "version": "1.0.0",
+  "description": "Azure Durable Functions for VM Performance Monitoring and Recommendations",
+  "main": "src/functions.js",
+  "scripts": {
+    "start": "func start",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0",
+    "durable-functions": "^3.0.0",
+    "@azure/monitor-query": "^1.0.0",
+    "@azure/identity": "^4.0.0",
+    "@azure/arm-compute": "^21.0.0",
+    "@sendgrid/mail": "^8.1.0",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "azure-functions-core-tools": "^4.0.5455"
+  }
+}

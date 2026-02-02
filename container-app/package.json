@@ -1,0 +1,24 @@
+{
+  "name": "vmperf-orchestrator",
+  "version": "2.0.0",
+  "description": "VM Performance Monitoring Orchestrator - Multi-Tenant with Slack Bot Support",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "@azure/identity": "^4.0.0",
+    "@azure/keyvault-secrets": "^4.7.0",
+    "@azure/arm-compute": "^21.0.0",
+    "@azure/arm-resourcegraph": "^4.2.1",
+    "@azure/data-tables": "^13.2.2",
+    "@azure/storage-blob": "^12.17.0",
+    "@sendgrid/mail": "^8.1.0",
+    "axios": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

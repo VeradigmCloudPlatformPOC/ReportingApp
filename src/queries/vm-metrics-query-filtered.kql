@@ -1,0 +1,76 @@
+// VM Performance Metrics Query - Filtered by Subscription
+// Retrieves 7-day metrics for CPU, Memory, and Disk IOPS
+// Subscription: 45cc9718-d2ec-48c8-b490-df358d934895 (Praseodymium - Payerpath Dev)
+
+let startDate = ago(7d);
+let endDate = now();
+let targetSubscription = "45cc9718-d2ec-48c8-b490-df358d934895";
+
+// CPU Metrics
+let cpuMetrics = Perf
+| where TimeGenerated between (startDate .. endDate)
+| where ObjectName == "Processor" and CounterName == "% Processor Time"
+| where InstanceName == "_Total"
+| where _ResourceId contains targetSubscription
+| summarize
+    CPU_Max = max(CounterValue),
+    CPU_Avg = avg(CounterValue),
+    CPU_P95 = percentile(CounterValue, 95),
+    CPU_Min = min(CounterValue)
+    by Computer, _ResourceId
+| extend MetricType = "CPU";
+
+// Memory Metrics
+let memoryMetrics = Perf
+| where TimeGenerated between (startDate .. endDate)
+| where ObjectName == "Memory" and CounterName == "% Committed Bytes In Use"
+| where _ResourceId contains targetSubscription
+| summarize
+    Memory_Max = max(CounterValue),
+    Memory_Avg = avg(CounterValue),
+    Memory_P95 = percentile(CounterValue, 95),
+    Memory_Min = min(CounterValue)
+    by Computer, _ResourceId
+| extend MetricType = "Memory";
+
+// Disk IOPS Metrics
+let diskMetrics = Perf
+| where TimeGenerated between (startDate .. endDate)
+| where ObjectName == "LogicalDisk" and CounterName in ("Disk Reads/sec", "Disk Writes/sec")
+| where InstanceName != "_Total"
+| where _ResourceId contains targetSubscription
+| summarize
+    TotalIOPS = sum(CounterValue)
+    by Computer, _ResourceId, TimeGenerated, InstanceName
+| summarize
+    DiskIOPS_Max = max(TotalIOPS),
+    DiskIOPS_Avg = avg(TotalIOPS),
+    DiskIOPS_P95 = percentile(TotalIOPS, 95)
+    by Computer, _ResourceId
+| extend MetricType = "DiskIOPS";
+
+// Get VM details from ResourceId
+// Combine all metrics
+cpuMetrics
+| join kind=inner (memoryMetrics) on Computer, _ResourceId
+| join kind=inner (diskMetrics) on Computer, _ResourceId
+| extend ResourceGroup = tostring(split(_ResourceId, "/")[4])
+| extend SubscriptionId = tostring(split(_ResourceId, "/")[2])
+| extend VMName = Computer
+| project
+    VMName,
+    ResourceId = _ResourceId,
+    ResourceGroup,
+    SubscriptionId,
+    CPU_Max = round(CPU_Max, 2),
+    CPU_Avg = round(CPU_Avg, 2),
+    CPU_P95 = round(CPU_P95, 2),
+    Memory_Max = round(Memory_Max, 2),
+    Memory_Avg = round(Memory_Avg, 2),
+    Memory_P95 = round(Memory_P95, 2),
+    DiskIOPS_Max = round(DiskIOPS_Max, 2),
+    DiskIOPS_Avg = round(DiskIOPS_Avg, 2),
+    DiskIOPS_P95 = round(DiskIOPS_P95, 2),
+    AnalysisPeriod = strcat(format_datetime(startDate, 'yyyy-MM-dd'), " to ", format_datetime(endDate, 'yyyy-MM-dd'))
+| where SubscriptionId == targetSubscription
+| order by VMName asc;

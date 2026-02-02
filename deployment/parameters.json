@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "eastus2"
+    },
+    "resourcePrefix": {
+      "value": "vmperf"
+    },
+    "logAnalyticsWorkspaceId": {
+      "value": "/subscriptions/54305029-7d35-40a9-8bf9-950963b449cc/resourceGroups/Ue1NePrdPerfLaw-Rg/providers/Microsoft.OperationalInsights/workspaces/Ue1NePrd-perf-only-log-analytics-workspace"
+    },
+    "aiFoundryEndpoint": {
+      "value": "https://saig-test-openai.cognitiveservices.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2025-01-01-preview"
+    },
+    "aiFoundryApiKey": {
+      "value": "<YOUR_OPENAI_API_KEY>"
+    },
+    "technicalEmailRecipients": {
+      "value": "saigunaranjan.andhra@veradigm.com"
+    },
+    "executiveEmailRecipients": {
+      "value": "saigunaranjan.andhra@veradigm.com"
+    },
+    "scheduleDayOfWeek": {
+      "value": "Monday"
+    },
+    "scheduleHour": {
+      "value": 8
+    },
+    "tags": {
+      "value": {
+        "Environment": "Test",
+        "Solution": "VM-Performance-Monitoring",
+        "CostCenter": "IT-Ops",
+        "Owner": "Sai-Test"
+      }
+    }
+  }
+}

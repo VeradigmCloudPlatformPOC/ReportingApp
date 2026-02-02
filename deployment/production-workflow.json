@@ -1,0 +1,240 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "recurrence": {
+          "frequency": "Week",
+          "interval": 1,
+          "schedule": {
+            "hours": [8],
+            "minutes": [0],
+            "weekDays": ["Monday"]
+          },
+          "timeZone": "UTC"
+        },
+        "type": "Recurrence"
+      }
+    },
+    "actions": {
+      "Initialize_Report_Date": {
+        "runAfter": {},
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "ReportDate",
+              "type": "string",
+              "value": "@{formatDateTime(utcNow(), 'yyyy-MM-dd')}"
+            }
+          ]
+        }
+      },
+      "Initialize_Recommendations_Array": {
+        "runAfter": {
+          "Initialize_Report_Date": ["Succeeded"]
+        },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "AllRecommendations",
+              "type": "array",
+              "value": []
+            }
+          ]
+        }
+      },
+      "Query_Log_Analytics": {
+        "runAfter": {
+          "Initialize_Recommendations_Array": ["Succeeded"]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": "let startDate = ago(7d);\nlet endDate = now();\nlet targetSubscription = \"45cc9718-d2ec-48c8-b490-df358d934895\";\nlet cpuMetrics = Perf\n| where TimeGenerated between (startDate .. endDate)\n| where ObjectName == \"Processor\" and CounterName == \"% Processor Time\"\n| where InstanceName == \"_Total\"\n| where _ResourceId contains targetSubscription\n| summarize CPU_Max = max(CounterValue), CPU_Avg = avg(CounterValue), CPU_P95 = percentile(CounterValue, 95) by Computer, _ResourceId;\nlet memoryMetrics = Perf\n| where TimeGenerated between (startDate .. endDate)\n| where ObjectName == \"Memory\" and CounterName == \"% Committed Bytes In Use\"\n| where _ResourceId contains targetSubscription\n| summarize Memory_Max = max(CounterValue), Memory_Avg = avg(CounterValue), Memory_P95 = percentile(CounterValue, 95) by Computer, _ResourceId;\nlet diskMetrics = Perf\n| where TimeGenerated between (startDate .. endDate)\n| where ObjectName == \"LogicalDisk\" and CounterName in (\"Disk Reads/sec\", \"Disk Writes/sec\")\n| where InstanceName != \"_Total\"\n| where _ResourceId contains targetSubscription\n| summarize TotalIOPS = sum(CounterValue) by Computer, _ResourceId, TimeGenerated\n| summarize DiskIOPS_Max = max(TotalIOPS), DiskIOPS_Avg = avg(TotalIOPS), DiskIOPS_P95 = percentile(TotalIOPS, 95) by Computer, _ResourceId;\ncpuMetrics\n| join kind=inner (memoryMetrics) on Computer, _ResourceId\n| join kind=inner (diskMetrics) on Computer, _ResourceId\n| extend ResourceGroup = tostring(split(_ResourceId, \"/\")[4])\n| extend SubscriptionId = tostring(split(_ResourceId, \"/\")[2])\n| project VMName = Computer, ResourceId = _ResourceId, ResourceGroup, SubscriptionId, CPU_Max = round(CPU_Max, 2), CPU_Avg = round(CPU_Avg, 2), CPU_P95 = round(CPU_P95, 2), Memory_Max = round(Memory_Max, 2), Memory_Avg = round(Memory_Avg, 2), Memory_P95 = round(Memory_P95, 2), DiskIOPS_Max = round(DiskIOPS_Max, 2), DiskIOPS_Avg = round(DiskIOPS_Avg, 2), DiskIOPS_P95 = round(DiskIOPS_P95, 2)\n| take 20",
+          "path": "/queryData",
+          "queries": {
+            "resourceId": "/subscriptions/54305029-7d35-40a9-8bf9-950963b449cc/resourceGroups/Ue1NePrdPerfLaw-Rg/providers/Microsoft.OperationalInsights/workspaces/Ue1NePrd-perf-only-log-analytics-workspace",
+            "timeRange": "P7D"
+          }
+        }
+      },
+      "Parse_Query_Results": {
+        "runAfter": {
+          "Query_Log_Analytics": ["Succeeded"]
+        },
+        "type": "ParseJson",
+        "inputs": {
+          "content": "@body('Query_Log_Analytics')",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "tables": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "For_Each_VM": {
+        "foreach": "@body('Parse_Query_Results')?['tables']?[0]?['rows']",
+        "actions": {
+          "Compose_VM_Data": {
+            "type": "Compose",
+            "inputs": {
+              "vmName": "@items('For_Each_VM')?[0]",
+              "resourceId": "@items('For_Each_VM')?[1]",
+              "resourceGroup": "@items('For_Each_VM')?[2]",
+              "subscriptionId": "@items('For_Each_VM')?[3]",
+              "metrics": {
+                "cpu": {
+                  "max": "@items('For_Each_VM')?[4]",
+                  "avg": "@items('For_Each_VM')?[5]",
+                  "p95": "@items('For_Each_VM')?[6]"
+                },
+                "memory": {
+                  "max": "@items('For_Each_VM')?[7]",
+                  "avg": "@items('For_Each_VM')?[8]",
+                  "p95": "@items('For_Each_VM')?[9]"
+                },
+                "diskIOPS": {
+                  "max": "@items('For_Each_VM')?[10]",
+                  "avg": "@items('For_Each_VM')?[11]",
+                  "p95": "@items('For_Each_VM')?[12]"
+                }
+              }
+            }
+          },
+          "Analyze_VM_with_AI": {
+            "runAfter": {
+              "Compose_VM_Data": ["Succeeded"]
+            },
+            "type": "Http",
+            "inputs": {
+              "method": "POST",
+              "uri": "https://saig-test-openai.cognitiveservices.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2025-01-01-preview",
+              "headers": {
+                "Content-Type": "application/json",
+                "api-key": "<YOUR_OPENAI_API_KEY>"
+              },
+              "body": {
+                "messages": [
+                  {
+                    "role": "system",
+                    "content": "You are an Azure infrastructure optimization expert. Analyze VM performance metrics and provide specific recommendations with cost implications. For EACH VM provide: 1) Utilization assessment 2) Recommended action (UPSIZE/DOWNSIZE/MAINTAIN) 3) Specific Azure VM SKU recommendation if change needed 4) Expected cost impact 5) Risk level. Be concise but specific."
+                  },
+                  {
+                    "role": "user",
+                    "content": "Analyze VM: @{outputs('Compose_VM_Data')}\n\nCriteria:\n- UNDERUTILIZED: CPU P95<20%, Memory P95<30% → DOWNSIZE\n- OVERUTILIZED: CPU P95>80%, Memory P95>85% → UPSIZE\n- OPTIMAL: CPU 40-70%, Memory 50-75% → MAINTAIN\n\nProvide specific SKU recommendations and estimated monthly cost impact. Format as markdown."
+                  }
+                ],
+                "max_completion_tokens": 800,
+                "temperature": 1
+              }
+            }
+          },
+          "Append_Recommendation": {
+            "runAfter": {
+              "Analyze_VM_with_AI": ["Succeeded"]
+            },
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "AllRecommendations",
+              "value": {
+                "vm": "@outputs('Compose_VM_Data')",
+                "analysis": "@body('Analyze_VM_with_AI')?['choices']?[0]?['message']?['content']"
+              }
+            }
+          }
+        },
+        "runAfter": {
+          "Parse_Query_Results": ["Succeeded"]
+        },
+        "type": "Foreach",
+        "runtimeConfiguration": {
+          "concurrency": {
+            "repetitions": 5
+          }
+        }
+      },
+      "Generate_Technical_Report": {
+        "runAfter": {
+          "For_Each_VM": ["Succeeded"]
+        },
+        "type": "Http",
+        "inputs": {
+          "method": "POST",
+          "uri": "https://saig-test-openai.cognitiveservices.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2025-01-01-preview",
+          "headers": {
+            "Content-Type": "application/json",
+            "api-key": "<YOUR_OPENAI_API_KEY>"
+          },
+          "body": {
+            "messages": [
+              {
+                "role": "system",
+                "content": "Generate a comprehensive technical report for DevOps engineers from VM analysis data. Include: executive summary, detailed VM recommendations with metrics, implementation steps, cost breakdown, and priority actions. Use HTML formatting with proper sections, tables, and styling."
+              },
+              {
+                "role": "user",
+                "content": "Create detailed technical HTML report from these VM analyses:\n\n@{variables('AllRecommendations')}\n\nInclude:\n1. Summary stats (total VMs, actions needed, savings)\n2. Each VM with full metrics and recommendations\n3. Top 5 priority actions by savings\n4. Implementation guidance\n5. Use professional HTML/CSS styling"
+              }
+            ],
+            "max_completion_tokens": 4000,
+            "temperature": 1
+          }
+        }
+      },
+      "Send_Technical_Email": {
+        "runAfter": {
+          "Generate_Technical_Report": ["Succeeded"]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": {
+            "To": "saigunaranjan.andhra@veradigm.com",
+            "Subject": "Weekly VM Performance & Sizing Recommendations - @{variables('ReportDate')}",
+            "Body": "@{body('Generate_Technical_Report')?['choices']?[0]?['message']?['content']}",
+            "Importance": "Normal"
+          },
+          "path": "/v2/Mail"
+        }
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "value": {
+        "office365": {
+          "connectionId": "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/resourceGroups/vmperf-monitoring-rg/providers/Microsoft.Web/connections/vmperf-office365-connection",
+          "connectionName": "vmperf-office365-connection",
+          "id": "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/providers/Microsoft.Web/locations/eastus2/managedApis/office365"
+        },
+        "azuremonitorlogs": {
+          "connectionId": "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/resourceGroups/vmperf-monitoring-rg/providers/Microsoft.Web/connections/vmperf-azmonitor-connection",
+          "connectionName": "vmperf-azmonitor-connection",
+          "id": "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/providers/Microsoft.Web/locations/eastus2/managedApis/azuremonitorlogs"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Local Azure Functions settings (contains secrets)
+local.settings.json
+
+# Build outputs
+dist/
+*.js.map
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Azure Functions artifacts
+.azure/
+.funcignore
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# TypeScript
+*.tsbuildinfo

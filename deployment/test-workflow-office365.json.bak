@@ -1,0 +1,113 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "manual": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "schema": {}
+        }
+      }
+    },
+    "actions": {
+      "Initialize_VM_Test_Data": {
+        "runAfter": {},
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "TestVMMetrics",
+              "type": "string",
+              "value": "{\"vmName\":\"prod-web-01\",\"resourceGroup\":\"production-rg\",\"currentSKU\":\"Standard_D4s_v3\",\"metrics\":{\"cpu\":{\"max\":85.2,\"avg\":72.3,\"p95\":82.1},\"memory\":{\"max\":88.5,\"avg\":78.2,\"p95\":85.3},\"diskIOPS\":{\"max\":5200,\"avg\":3800,\"p95\":4900}},\"currentMonthlyCost\":140.16}"
+            }
+          ]
+        }
+      },
+      "Call_Azure_OpenAI_for_Analysis": {
+        "runAfter": {
+          "Initialize_VM_Test_Data": ["Succeeded"]
+        },
+        "type": "Http",
+        "inputs": {
+          "method": "POST",
+          "uri": "https://saig-test-openai.cognitiveservices.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2025-01-01-preview",
+          "headers": {
+            "Content-Type": "application/json",
+            "api-key": "<YOUR_OPENAI_API_KEY>"
+          },
+          "body": {
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are an Azure cloud infrastructure optimization expert. Analyze VM performance metrics and provide sizing recommendations with cost implications."
+              },
+              {
+                "role": "user",
+                "content": "Analyze this VM and provide a concise recommendation with specific VM SKU suggestions and cost impact:\n\nVM Data: @{variables('TestVMMetrics')}\n\nProvide:\n1. Current utilization assessment\n2. Recommended action (UPSIZE/DOWNSIZE/MAINTAIN)\n3. Suggested VM SKU if change needed\n4. Expected monthly cost savings or increase\n5. Risk level (LOW/MEDIUM/HIGH)\n\nKeep response under 200 words."
+              }
+            ],
+            "max_completion_tokens": 500,
+            "temperature": 0.3
+          }
+        }
+      },
+      "Parse_AI_Response": {
+        "runAfter": {
+          "Call_Azure_OpenAI_for_Analysis": ["Succeeded"]
+        },
+        "type": "ParseJson",
+        "inputs": {
+          "content": "@body('Call_Azure_OpenAI_for_Analysis')",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "choices": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "Send_Test_Email": {
+        "runAfter": {
+          "Parse_AI_Response": ["Succeeded"]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": {
+            "To": "saigunaranjan.andhra@veradigm.com",
+            "Subject": "✅ VM Performance Monitoring Test - Success!",
+            "Body": "<html><head><style>body{font-family:Arial,sans-serif;margin:20px;background-color:#f5f5f5}.container{background-color:white;padding:30px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}.header{background:linear-gradient(135deg,#0078d4 0%,#004a8c 100%);color:white;padding:20px;border-radius:8px;margin:-30px -30px 20px -30px}.metric-box{background-color:#f0f6ff;border-left:4px solid #0078d4;padding:15px;margin:10px 0;border-radius:4px}.recommendation{background-color:#e8f4f8;border-left:4px solid #00bcf2;padding:15px;margin:15px 0;border-radius:4px}</style></head><body><div class=\"container\"><div class=\"header\"><h1>🔧 VM Performance Monitoring Test</h1><p>AI-Powered Analysis Demo</p><p>Generated: @{utcNow()}</p></div><h2>Test Status: ✅ Success</h2><p>All components working correctly!</p><div class=\"metric-box\"><h3>📊 Test VM Metrics</h3><pre>@{variables('TestVMMetrics')}</pre></div><div class=\"recommendation\"><h3>💡 AI-Generated Recommendation</h3><p>@{body('Parse_AI_Response')?['choices']?[0]?['message']?['content']}</p></div><h3>✅ Verified Components:</h3><ul><li>✅ Azure Logic App deployed</li><li>✅ Azure OpenAI (GPT-5) working</li><li>✅ AI analysis generating recommendations</li><li>✅ Email delivery successful</li><li>✅ Log Analytics workspace configured</li></ul><p><strong>Logic App:</strong> vmperf-logic-app<br><strong>AI Model:</strong> GPT-5</p></div></body></html>",
+            "Importance": "Normal"
+          },
+          "path": "/v2/Mail"
+        }
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "value": {
+        "office365": {
+          "connectionId": "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/resourceGroups/vmperf-monitoring-rg/providers/Microsoft.Web/connections/vmperf-office365-connection",
+          "connectionName": "vmperf-office365-connection",
+          "id": "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/providers/Microsoft.Web/locations/eastus2/managedApis/office365"
+        }
+      }
+    }
+  }
+}

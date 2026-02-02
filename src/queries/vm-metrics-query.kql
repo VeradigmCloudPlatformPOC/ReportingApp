@@ -1,0 +1,78 @@
+// VM Performance Metrics Query
+// Retrieves 7-day metrics for CPU, Memory, and Disk IOPS
+// Run this query in Log Analytics workspace
+
+let startDate = ago(7d);
+let endDate = now();
+
+// CPU Metrics
+let cpuMetrics = Perf
+| where TimeGenerated between (startDate .. endDate)
+| where ObjectName == "Processor" and CounterName == "% Processor Time"
+| where InstanceName == "_Total"
+| summarize
+    CPU_Max = max(CounterValue),
+    CPU_Avg = avg(CounterValue),
+    CPU_P95 = percentile(CounterValue, 95),
+    CPU_Min = min(CounterValue)
+    by Computer, _ResourceId
+| extend MetricType = "CPU";
+
+// Memory Metrics
+let memoryMetrics = Perf
+| where TimeGenerated between (startDate .. endDate)
+| where ObjectName == "Memory" and CounterName == "% Committed Bytes In Use"
+| summarize
+    Memory_Max = max(CounterValue),
+    Memory_Avg = avg(CounterValue),
+    Memory_P95 = percentile(CounterValue, 95),
+    Memory_Min = min(CounterValue)
+    by Computer, _ResourceId
+| extend MetricType = "Memory";
+
+// Disk IOPS Metrics
+let diskMetrics = Perf
+| where TimeGenerated between (startDate .. endDate)
+| where ObjectName == "LogicalDisk" and CounterName in ("Disk Reads/sec", "Disk Writes/sec")
+| where InstanceName != "_Total"
+| summarize
+    TotalIOPS = sum(CounterValue)
+    by Computer, _ResourceId, TimeGenerated, InstanceName
+| summarize
+    DiskIOPS_Max = max(TotalIOPS),
+    DiskIOPS_Avg = avg(TotalIOPS),
+    DiskIOPS_P95 = percentile(TotalIOPS, 95)
+    by Computer, _ResourceId
+| extend MetricType = "DiskIOPS";
+
+// Get VM details and combine all metrics
+let vmDetails = AzureActivity
+| where ResourceProviderValue == "MICROSOFT.COMPUTE"
+| where ResourceType == "MICROSOFT.COMPUTE/VIRTUALMACHINES"
+| distinct
+    ResourceId,
+    ResourceGroup,
+    SubscriptionId
+| extend Computer = tostring(split(ResourceId, "/")[8]);
+
+// Combine all metrics
+cpuMetrics
+| join kind=inner (memoryMetrics) on Computer, _ResourceId
+| join kind=inner (diskMetrics) on Computer, _ResourceId
+| join kind=inner (vmDetails) on $left._ResourceId == $right.ResourceId
+| project
+    VMName = Computer,
+    ResourceId = _ResourceId,
+    ResourceGroup,
+    SubscriptionId,
+    CPU_Max = round(CPU_Max, 2),
+    CPU_Avg = round(CPU_Avg, 2),
+    CPU_P95 = round(CPU_P95, 2),
+    Memory_Max = round(Memory_Max, 2),
+    Memory_Avg = round(Memory_Avg, 2),
+    Memory_P95 = round(Memory_P95, 2),
+    DiskIOPS_Max = round(DiskIOPS_Max, 2),
+    DiskIOPS_Avg = round(DiskIOPS_Avg, 2),
+    DiskIOPS_P95 = round(DiskIOPS_P95, 2),
+    AnalysisPeriod = strcat(format_datetime(startDate, 'yyyy-MM-dd'), " to ", format_datetime(endDate, 'yyyy-MM-dd'))
+| order by VMName asc;

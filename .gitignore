@@ -1,0 +1,56 @@
+# Azure deployment artifacts
+*.zip
+deployment-output.json
+
+# Credentials and secrets
+*.env
+.env.*
+secrets.json
+*.key
+*.pem
+
+# Azure CLI cache
+.azure/
+
+# Parameters with sensitive data
+parameters.local.json
+local.parameters.json
+local.settings.json
+**/local.settings.json
+
+# IDE and editor files
+
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude Code plans
+.claude/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build outputs
+dist/
+build/
+out/
+
+# Node modules (if using any Node.js tooling)
+node_modules/
+
+# Python (if using any Python scripts)
+__pycache__/
+*.pyc
+venv/
+.venv/

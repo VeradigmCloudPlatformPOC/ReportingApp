@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weekly VM Performance & Sizing Recommendations</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        .header {
+            background: linear-gradient(135deg, #0078d4 0%, #004a8c 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+            margin: -30px -30px 30px -30px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .header p {
+            margin: 5px 0 0 0;
+            opacity: 0.9;
+        }
+        .summary-box {
+            background-color: #f0f6ff;
+            border-left: 4px solid #0078d4;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .vm-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 20px 0;
+            background-color: #fafafa;
+        }
+        .vm-card h3 {
+            margin-top: 0;
+            color: #0078d4;
+            border-bottom: 2px solid #0078d4;
+            padding-bottom: 10px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .status-underutilized {
+            background-color: #fff4ce;
+            color: #d68910;
+        }
+        .status-overutilized {
+            background-color: #fce4e4;
+            color: #d13438;
+        }
+        .status-optimal {
+            background-color: #dff6dd;
+            color: #107c10;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .metric-box {
+            background-color: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 12px;
+        }
+        .metric-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+        .metric-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #0078d4;
+            margin-top: 5px;
+        }
+        .recommendation-box {
+            background-color: #e8f4f8;
+            border-left: 4px solid #00bcf2;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .recommendation-box h4 {
+            margin-top: 0;
+            color: #00bcf2;
+        }
+        .cost-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        .cost-table th, .cost-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .cost-table th {
+            background-color: #f0f0f0;
+            font-weight: 600;
+            color: #333;
+        }
+        .savings {
+            color: #107c10;
+            font-weight: bold;
+        }
+        .cost-increase {
+            color: #d13438;
+            font-weight: bold;
+        }
+        .implementation-steps {
+            background-color: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .implementation-steps ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .implementation-steps li {
+            margin: 8px 0;
+        }
+        .risk-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .risk-low {
+            background-color: #dff6dd;
+            color: #107c10;
+        }
+        .risk-medium {
+            background-color: #fff4ce;
+            color: #d68910;
+        }
+        .risk-high {
+            background-color: #fce4e4;
+            color: #d13438;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+        .action-button {
+            display: inline-block;
+            background-color: #0078d4;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: 600;
+            margin: 10px 5px;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔧 Weekly VM Performance & Sizing Recommendations</h1>
+            <p>Technical Report for DevOps Engineers</p>
+            <p>Report Period: {{REPORT_PERIOD}} | Generated: {{REPORT_DATE}}</p>
+        </div>
+
+        <div class="summary-box">
+            <h2>📊 Quick Summary</h2>
+            <div class="metrics-grid">
+                <div class="metric-box">
+                    <div class="metric-label">Total VMs Analyzed</div>
+                    <div class="metric-value">{{TOTAL_VMS}}</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Action Required</div>
+                    <div class="metric-value">{{ACTION_REQUIRED}}</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Monthly Savings</div>
+                    <div class="metric-value savings">${{MONTHLY_SAVINGS}}</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Annual Impact</div>
+                    <div class="metric-value savings">${{ANNUAL_SAVINGS}}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VM Details Section - Repeat for each VM -->
+        {{VM_DETAILS_START}}
+        <div class="vm-card">
+            <h3>{{VM_NAME}}</h3>
+            <p>
+                <strong>Current SKU:</strong> {{CURRENT_SKU}} |
+                <strong>Resource Group:</strong> {{RESOURCE_GROUP}} |
+                <span class="status-badge status-{{STATUS_CLASS}}">{{STATUS}}</span>
+            </p>
+
+            <h4>Performance Analysis (7-day period)</h4>
+            <div class="metrics-grid">
+                <div class="metric-box">
+                    <div class="metric-label">CPU Utilization</div>
+                    <div class="metric-value">{{CPU_P95}}%</div>
+                    <small>Max: {{CPU_MAX}}% | Avg: {{CPU_AVG}}%</small>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Memory Utilization</div>
+                    <div class="metric-value">{{MEMORY_P95}}%</div>
+                    <small>Max: {{MEMORY_MAX}}% | Avg: {{MEMORY_AVG}}%</small>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Disk IOPS</div>
+                    <div class="metric-value">{{DISK_P95}}</div>
+                    <small>Max: {{DISK_MAX}} | Avg: {{DISK_AVG}}</small>
+                </div>
+            </div>
+
+            <div class="recommendation-box">
+                <h4>💡 Recommendation: {{ACTION}}</h4>
+                <p><strong>Recommended SKU:</strong> {{RECOMMENDED_SKU}}</p>
+                <p>{{JUSTIFICATION}}</p>
+            </div>
+
+            <h4>Cost Impact</h4>
+            <table class="cost-table">
+                <tr>
+                    <th>Metric</th>
+                    <th>Current</th>
+                    <th>Recommended</th>
+                    <th>Impact</th>
+                </tr>
+                <tr>
+                    <td>Monthly Cost</td>
+                    <td>${{CURRENT_MONTHLY_COST}}</td>
+                    <td>${{RECOMMENDED_MONTHLY_COST}}</td>
+                    <td class="{{SAVINGS_CLASS}}">${{MONTHLY_SAVINGS_AMOUNT}} ({{SAVINGS_PERCENT}}%)</td>
+                </tr>
+                <tr>
+                    <td>Annual Cost</td>
+                    <td>${{CURRENT_ANNUAL_COST}}</td>
+                    <td>${{RECOMMENDED_ANNUAL_COST}}</td>
+                    <td class="{{SAVINGS_CLASS}}">${{ANNUAL_SAVINGS_AMOUNT}}</td>
+                </tr>
+            </table>
+
+            <div class="implementation-steps">
+                <h4>Implementation Steps</h4>
+                <ol>
+                    {{IMPLEMENTATION_STEPS}}
+                </ol>
+                <p>
+                    <strong>Downtime:</strong> {{DOWNTIME_ESTIMATE}} |
+                    <strong>Risk Level:</strong> <span class="risk-badge risk-{{RISK_LEVEL}}">{{RISK_LEVEL}}</span>
+                </p>
+                <p><strong>Considerations:</strong> {{CONSIDERATIONS}}</p>
+            </div>
+        </div>
+        {{VM_DETAILS_END}}
+
+        <!-- Overall Summary -->
+        <div class="summary-box">
+            <h2>🎯 Priority Actions</h2>
+            <p>Top 5 VMs by savings potential:</p>
+            <table class="cost-table">
+                <tr>
+                    <th>Rank</th>
+                    <th>VM Name</th>
+                    <th>Action</th>
+                    <th>SKU Change</th>
+                    <th>Monthly Savings</th>
+                </tr>
+                {{PRIORITY_ACTIONS}}
+            </table>
+        </div>
+
+        <div class="summary-box">
+            <h2>📝 Technical Notes</h2>
+            {{TECHNICAL_NOTES}}
+        </div>
+
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="{{AZURE_PORTAL_LINK}}" class="action-button">View in Azure Portal</a>
+            <a href="{{LOG_ANALYTICS_LINK}}" class="action-button">Open Log Analytics</a>
+        </div>
+
+        <div class="footer">
+            <p>This report was automatically generated by the VM Performance Monitoring System</p>
+            <p>For questions or assistance, contact the Platform Engineering team</p>
+            <p><em>Data source: Azure Monitor | Analysis period: 7 days | Report frequency: Weekly</em></p>
+        </div>
+    </div>
+</body>
+</html>

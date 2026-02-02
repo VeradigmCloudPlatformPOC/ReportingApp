@@ -1,0 +1,29 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "maxTelemetryItemsPerSecond": 20
+      }
+    }
+  },
+  "extensions": {
+    "durableTask": {
+      "hubName": "VMPerfMonitoring",
+      "storageProvider": {
+        "connectionStringName": "AzureWebJobsStorage",
+        "partitionCount": 4
+      },
+      "maxConcurrentActivityFunctions": 50,
+      "maxConcurrentOrchestratorFunctions": 10
+    },
+    "http": {
+      "routePrefix": "api"
+    }
+  },
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[4.*, 5.0.0)"
+  }
+}

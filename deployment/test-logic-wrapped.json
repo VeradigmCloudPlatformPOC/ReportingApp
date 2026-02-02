@@ -1,0 +1,122 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "manual": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "schema": {}
+        }
+      }
+    },
+    "actions": {
+      "Initialize_Test_Data": {
+        "runAfter": {},
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "TestVMData",
+              "type": "string",
+              "value": "{\"vmName\":\"test-vm-01\",\"cpu\":{\"max\":85,\"avg\":62},\"memory\":{\"max\":78,\"avg\":55},\"recommendation\":\"Test VM showing high CPU utilization\"}"
+            }
+          ]
+        }
+      },
+      "Call_Azure_OpenAI": {
+        "runAfter": {
+          "Initialize_Test_Data": [
+            "Succeeded"
+          ]
+        },
+        "type": "Http",
+        "inputs": {
+          "method": "POST",
+          "uri": "https://saig-test-openai.cognitiveservices.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2025-01-01-preview",
+          "headers": {
+            "Content-Type": "application/json",
+            "api-key": "<YOUR_OPENAI_API_KEY>"
+          },
+          "body": {
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a cloud infrastructure expert. Analyze VM performance and provide a brief recommendation."
+              },
+              {
+                "role": "user",
+                "content": "Analyze this VM: @{variables('TestVMData')}"
+              }
+            ],
+            "max_tokens": 500,
+            "temperature": 0.3
+          }
+        }
+      },
+      "Parse_AI_Response": {
+        "runAfter": {
+          "Call_Azure_OpenAI": [
+            "Succeeded"
+          ]
+        },
+        "type": "ParseJson",
+        "inputs": {
+          "content": "@body('Call_Azure_OpenAI')",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "choices": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "object",
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Send_Test_Email": {
+        "runAfter": {
+          "Parse_AI_Response": [
+            "Succeeded"
+          ]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": {
+            "To": "saigunaranjan.andhra@veradigm.com",
+            "Subject": "VM Performance Test Report - @{utcNow()}",
+            "Body": "<html><body><h2>VM Performance Monitoring Test</h2><p>This is a test email from your VM Performance Monitoring solution.</p><h3>AI Analysis Result:</h3><p>@{body('Parse_AI_Response')?['choices']?[0]?['message']?['content']}</p><h3>Test VM Data:</h3><pre>@{variables('TestVMData')}</pre><p><em>Generated at: @{utcNow()}</em></p></body></html>",
+            "Importance": "Normal"
+          },
+          "path": "/v2/Mail"
+        }
+      }
+    },
+    "outputs": {}
+  }
+}

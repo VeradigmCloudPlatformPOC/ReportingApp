@@ -1,0 +1,285 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "$connections": {
+      "defaultValue": {},
+      "type": "Object"
+    },
+    "logAnalyticsWorkspaceId": {
+      "defaultValue": "",
+      "type": "String"
+    },
+    "aiFoundryEndpoint": {
+      "defaultValue": "",
+      "type": "String"
+    },
+    "technicalEmailRecipients": {
+      "defaultValue": "devops-team@company.com",
+      "type": "String"
+    },
+    "executiveEmailRecipients": {
+      "defaultValue": "leadership@company.com",
+      "type": "String"
+    }
+  },
+  "triggers": {
+    "Recurrence": {
+      "recurrence": {
+        "frequency": "Week",
+        "interval": 1,
+        "schedule": {
+          "hours": ["8"],
+          "minutes": [0],
+          "weekDays": ["Monday"]
+        },
+        "timeZone": "UTC"
+      },
+      "type": "Recurrence"
+    }
+  },
+  "actions": {
+    "Initialize_Report_Date": {
+      "runAfter": {},
+      "type": "InitializeVariable",
+      "inputs": {
+        "variables": [
+          {
+            "name": "ReportDate",
+            "type": "string",
+            "value": "@{formatDateTime(utcNow(), 'yyyy-MM-dd')}"
+          }
+        ]
+      }
+    },
+    "Query_VM_Metrics_from_Log_Analytics": {
+      "runAfter": {
+        "Initialize_Report_Date": ["Succeeded"]
+      },
+      "type": "ApiConnection",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']"
+          }
+        },
+        "method": "post",
+        "body": "@{variables('KQLQuery')}",
+        "path": "/queryData",
+        "queries": {
+          "resourceId": "@parameters('logAnalyticsWorkspaceId')",
+          "timeRange": "P7D"
+        }
+      }
+    },
+    "Parse_VM_Metrics": {
+      "runAfter": {
+        "Query_VM_Metrics_from_Log_Analytics": ["Succeeded"]
+      },
+      "type": "ParseJson",
+      "inputs": {
+        "content": "@body('Query_VM_Metrics_from_Log_Analytics')",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "tables": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {"type": "string"},
+                  "columns": {"type": "array"},
+                  "rows": {"type": "array"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Get_VM_SKU_and_Pricing_Info": {
+      "runAfter": {
+        "Parse_VM_Metrics": ["Succeeded"]
+      },
+      "type": "ApiConnection",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['arm']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/subscriptions/@{encodeURIComponent(variables('SubscriptionId'))}/providers/Microsoft.Compute/virtualMachines",
+        "queries": {
+          "api-version": "2023-09-01"
+        }
+      }
+    },
+    "For_Each_VM": {
+      "foreach": "@body('Parse_VM_Metrics')?['tables']?[0]?['rows']",
+      "actions": {
+        "Compose_VM_Data_Payload": {
+          "type": "Compose",
+          "inputs": {
+            "vmName": "@items('For_Each_VM')?[0]",
+            "resourceId": "@items('For_Each_VM')?[1]",
+            "resourceGroup": "@items('For_Each_VM')?[2]",
+            "metrics": {
+              "cpu": {
+                "max": "@items('For_Each_VM')?[4]",
+                "avg": "@items('For_Each_VM')?[5]",
+                "p95": "@items('For_Each_VM')?[6]"
+              },
+              "memory": {
+                "max": "@items('For_Each_VM')?[7]",
+                "avg": "@items('For_Each_VM')?[8]",
+                "p95": "@items('For_Each_VM')?[9]"
+              },
+              "diskIOPS": {
+                "max": "@items('For_Each_VM')?[10]",
+                "avg": "@items('For_Each_VM')?[11]",
+                "p95": "@items('For_Each_VM')?[12]"
+              }
+            },
+            "analysisPeriod": "@items('For_Each_VM')?[13]"
+          }
+        },
+        "Call_AI_Foundry_for_Analysis": {
+          "runAfter": {
+            "Compose_VM_Data_Payload": ["Succeeded"]
+          },
+          "type": "Http",
+          "inputs": {
+            "method": "POST",
+            "uri": "@parameters('aiFoundryEndpoint')",
+            "headers": {
+              "Content-Type": "application/json",
+              "api-key": "@parameters('$connections')['aiFoundry']['apiKey']"
+            },
+            "body": {
+              "messages": [
+                {
+                  "role": "system",
+                  "content": "You are a cloud infrastructure optimization expert. Analyze VM performance metrics and provide sizing recommendations with cost implications."
+                },
+                {
+                  "role": "user",
+                  "content": "@{concat('Analyze this VM and provide recommendations: ', string(outputs('Compose_VM_Data_Payload')))}"
+                }
+              ],
+              "max_tokens": 2000,
+              "temperature": 0.3
+            }
+          }
+        },
+        "Append_to_Recommendations_Array": {
+          "runAfter": {
+            "Call_AI_Foundry_for_Analysis": ["Succeeded"]
+          },
+          "type": "AppendToArrayVariable",
+          "inputs": {
+            "name": "AllRecommendations",
+            "value": "@body('Call_AI_Foundry_for_Analysis')"
+          }
+        }
+      },
+      "runAfter": {
+        "Get_VM_SKU_and_Pricing_Info": ["Succeeded"]
+      },
+      "type": "Foreach"
+    },
+    "Generate_Technical_Report": {
+      "runAfter": {
+        "For_Each_VM": ["Succeeded"]
+      },
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri": "@parameters('aiFoundryEndpoint')",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Generate a detailed technical report for DevOps engineers with specific recommendations and implementation steps."
+            },
+            {
+              "role": "user",
+              "content": "@{concat('Create technical report from: ', string(variables('AllRecommendations')))}"
+            }
+          ]
+        }
+      }
+    },
+    "Generate_Executive_Report": {
+      "runAfter": {
+        "For_Each_VM": ["Succeeded"]
+      },
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri": "@parameters('aiFoundryEndpoint')",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Generate an executive summary focused on cost savings, business impact, and risk assessment."
+            },
+            {
+              "role": "user",
+              "content": "@{concat('Create executive summary from: ', string(variables('AllRecommendations')))}"
+            }
+          ]
+        }
+      }
+    },
+    "Send_Technical_Email": {
+      "runAfter": {
+        "Generate_Technical_Report": ["Succeeded"]
+      },
+      "type": "ApiConnection",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['office365']['connectionId']"
+          }
+        },
+        "method": "post",
+        "body": {
+          "To": "@parameters('technicalEmailRecipients')",
+          "Subject": "Weekly VM Performance & Sizing Recommendations - @{variables('ReportDate')}",
+          "Body": "@body('Generate_Technical_Report')",
+          "Importance": "Normal"
+        },
+        "path": "/v2/Mail"
+      }
+    },
+    "Send_Executive_Email": {
+      "runAfter": {
+        "Generate_Executive_Report": ["Succeeded"]
+      },
+      "type": "ApiConnection",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['office365']['connectionId']"
+          }
+        },
+        "method": "post",
+        "body": {
+          "To": "@parameters('executiveEmailRecipients')",
+          "Subject": "Weekly VM Cost Optimization Summary - @{variables('ReportDate')}",
+          "Body": "@body('Generate_Executive_Report')",
+          "Importance": "High"
+        },
+        "path": "/v2/Mail"
+      }
+    }
+  },
+  "outputs": {}
+}
