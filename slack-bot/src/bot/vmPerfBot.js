@@ -34,9 +34,12 @@ class VMPerfBot extends ActivityHandler {
         this.agentService = null;
         this.conversationState = createConversationState(config);
 
-        // Flag to track if agent is available (will be updated during initialization)
-        // Check for either AI Foundry Agent OR OpenAI for dynamic queries
-        this.agentAvailable = !!(config.aiFoundry?.agentId || (config.openai?.endpoint && config.openai?.apiKey));
+        // Flag to track if AI Foundry Agent is available for full NLU conversation
+        // This is separate from OpenAI which is used for dynamic query generation
+        this.agentAvailable = !!config.aiFoundry?.agentId;
+
+        // Track if OpenAI is available for dynamic queries
+        this.openaiAvailable = !!(config.openai?.endpoint && config.openai?.apiKey);
 
         // Subscription context per user/channel - tracks selected subscription for queries
         // Key format: `${userId}_${channelId}` -> { subscriptionId, subscriptionName, tenantName, tenantId }
@@ -62,43 +65,44 @@ class VMPerfBot extends ActivityHandler {
     }
 
     /**
-     * Initialize the agent service lazily.
-     * Creates Azure OpenAI client for dynamic query generation even if AI Foundry Agent isn't configured.
+     * Initialize the OpenAI client for dynamic query generation.
+     * Only initializes full AgentService if AI Foundry Agent is configured.
      */
     async initializeAgent() {
-        if (this.agentService) return;
+        if (this._agentInitialized) return;
+        this._agentInitialized = true;
 
         try {
             // Create Azure OpenAI client for dynamic query generation
             // This is separate from the AI Foundry Agent - it's used for generating KQL queries
-            let aiClient = null;
             if (this.config.openai?.endpoint && this.config.openai?.apiKey) {
                 const deploymentName = this.config.openai.deploymentName || 'gpt-4';
-                aiClient = new AzureOpenAI({
+                this.aiClient = new AzureOpenAI({
                     endpoint: this.config.openai.endpoint,
                     apiKey: this.config.openai.apiKey,
                     apiVersion: '2024-06-01',
                     deployment: deploymentName
                 });
                 // Store deployment name for use in API calls
-                aiClient.deploymentName = deploymentName;
+                this.aiClient.deploymentName = deploymentName;
+                this.openaiAvailable = true;
                 console.log('Azure OpenAI client created for dynamic query generation');
                 console.log(`  Endpoint: ${this.config.openai.endpoint}`);
                 console.log(`  Deployment: ${deploymentName}`);
             } else {
                 console.warn('Azure OpenAI not configured - dynamic query tools will not be available');
-                console.warn(`  Endpoint: ${this.config.openai?.endpoint ? 'SET' : 'NOT SET'}`);
-                console.warn(`  API Key: ${this.config.openai?.apiKey ? 'SET' : 'NOT SET'}`);
             }
 
-            // Create agent service - works with or without AI Foundry Agent
-            // If AI Foundry Agent isn't available, uses fallback command handling
-            this.agentService = createAgentService(this.config, this.orchestrationClient, aiClient);
-            await this.agentService.initialize();
-            console.log('Agent service initialized successfully');
-
-            // Update agentAvailable based on whether we have any AI capability
-            this.agentAvailable = !!(this.config.aiFoundry?.agentId || aiClient);
+            // Only create full AgentService if AI Foundry Agent is configured
+            if (this.config.aiFoundry?.agentId && this.config.aiFoundry?.projectEndpoint) {
+                this.agentService = createAgentService(this.config, this.orchestrationClient, this.aiClient);
+                await this.agentService.initialize();
+                this.agentAvailable = true;
+                console.log('AI Foundry Agent service initialized successfully');
+            } else {
+                console.log('AI Foundry Agent not configured - using fallback command handling');
+                this.agentAvailable = false;
+            }
         } catch (error) {
             console.error('Failed to initialize agent service:', error.message);
             this.agentAvailable = false;
