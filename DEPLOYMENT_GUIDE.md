@@ -713,6 +713,63 @@ curl "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.i
 
 ---
 
+### v9 Feature: Dynamic AI-Generated Queries (February 2026)
+
+The v9 release adds support for dynamic AI-generated queries. Users can ask natural language questions and the system will:
+1. Determine query type (KQL for metrics, Resource Graph for inventory)
+2. Generate appropriate query via Azure OpenAI
+3. Validate query for security
+4. Execute and return results
+
+**Slack Commands**:
+| Command | Description |
+|---------|-------------|
+| "Show VMs with high CPU" | Generates KQL query for CPU metrics |
+| "List all VMs in eastus" | Generates Resource Graph query |
+| "What VMs have memory > 80%" | Generates KQL query for memory |
+
+**API Endpoints**:
+```bash
+# Execute dynamic KQL query
+curl -X POST "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/query/dynamic-kql" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Perf | where CounterName == \"% Processor Time\" | take 10"}'
+
+# Execute dynamic Resource Graph query
+curl -X POST "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/query/dynamic-resourcegraph" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Resources | where type == \"microsoft.compute/virtualmachines\" | take 10"}'
+```
+
+**Security Validation**:
+- Table whitelist: Only Perf, Heartbeat, AzureDiagnostics, InsightsMetrics, etc.
+- Blocks dangerous operations: .delete, .set, .drop, .alter, union *, etc.
+- Injection pattern detection
+- Comment stripping
+- Query length and result limits
+
+**Auto-Detect Delivery**:
+- ≤50 rows: Results displayed inline in Slack
+- >50 rows: Results sent via email, summary in Slack
+
+**Required Key Vault Secrets**:
+- `OpenAIEndpoint` - Azure OpenAI endpoint URL
+- `OpenAIApiKey` - Azure OpenAI API key
+- `OpenAIDeploymentName` (optional) - Defaults to 'gpt-4'
+
+**Verification**:
+```bash
+# Test dynamic KQL endpoint
+curl -X POST "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/query/dynamic-kql" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Perf | take 1"}' | jq .
+
+# Check slack-bot health for OpenAI status
+curl -s "https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health" | jq .
+```
+
+---
+
 ### Legacy Issues
 
 ### Issue: No VMs in Report

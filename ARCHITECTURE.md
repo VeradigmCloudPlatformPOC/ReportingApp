@@ -1,6 +1,264 @@
 # Architecture Documentation
 
-## System Architecture
+## Version 9: Container Apps with Dynamic Queries (Current)
+
+### Overview
+
+The v9 architecture uses Azure Container Apps for the backend services with a Slack bot interface. It supports both static scheduled reports and dynamic AI-generated queries.
+
+### Architecture Diagram (v9)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              User Interaction Layer                              │
+│                                                                                 │
+│   ┌─────────────────┐                                                           │
+│   │     Slack       │  "Show me VMs with high CPU"                              │
+│   │   (User Chat)   │  "List all VMs in eastus"                                 │
+│   └────────┬────────┘                                                           │
+│            │                                                                    │
+│            ▼                                                                    │
+└────────────┼────────────────────────────────────────────────────────────────────┘
+             │
+┌────────────┼────────────────────────────────────────────────────────────────────┐
+│            ▼                         Azure Container Apps                        │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │                        vmperf-slack-bot                                  │   │
+│   │  ┌───────────────┐    ┌───────────────┐    ┌───────────────────────┐    │   │
+│   │  │ Slack Events  │───▶│ Command       │───▶│ OpenAI Client         │    │   │
+│   │  │ Handler       │    │ Router        │    │ (Dynamic Queries)     │    │   │
+│   │  └───────────────┘    └───────┬───────┘    └───────────┬───────────┘    │   │
+│   │                               │                        │                │   │
+│   │                               │                        │ Generate KQL   │   │
+│   │                               ▼                        ▼                │   │
+│   │                     ┌─────────────────────────────────────┐             │   │
+│   │                     │        Orchestration Client         │             │   │
+│   │                     └─────────────────┬───────────────────┘             │   │
+│   └───────────────────────────────────────┼─────────────────────────────────┘   │
+│                                           │                                     │
+│                                           │ REST API                            │
+│                                           ▼                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │                      vmperf-orchestrator                                 │   │
+│   │                                                                         │   │
+│   │  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────────────┐   │   │
+│   │  │ Static Reports  │  │ Dynamic Queries │  │ Query Validation       │   │   │
+│   │  │ /api/orchestrate│  │ /api/query/*    │  │ Security Layer         │   │   │
+│   │  └────────┬────────┘  └────────┬────────┘  │ • Table whitelist      │   │   │
+│   │           │                    │           │ • Dangerous ops block  │   │   │
+│   │           │                    │           │ • Injection detection  │   │   │
+│   │           ▼                    ▼           └────────────────────────┘   │   │
+│   │  ┌─────────────────────────────────────────────────────────────────┐    │   │
+│   │  │              Multi-Tenant Services Layer                        │    │   │
+│   │  │  ┌─────────────────┐  ┌──────────────────┐  ┌───────────────┐   │    │   │
+│   │  │  │ Log Analytics   │  │ Resource Graph   │  │ Storage       │   │    │   │
+│   │  │  │ (KQL Queries)   │  │ (VM Inventory)   │  │ (Results)     │   │    │   │
+│   │  │  └────────┬────────┘  └────────┬─────────┘  └───────────────┘   │    │   │
+│   │  └───────────┼────────────────────┼────────────────────────────────┘    │   │
+│   └──────────────┼────────────────────┼─────────────────────────────────────┘   │
+│                  │                    │                                         │
+└──────────────────┼────────────────────┼─────────────────────────────────────────┘
+                   │                    │
+┌──────────────────┼────────────────────┼─────────────────────────────────────────┐
+│                  ▼                    ▼                Azure Services            │
+│   ┌────────────────────┐   ┌────────────────────┐   ┌────────────────────┐      │
+│   │ Log Analytics      │   │ Resource Graph     │   │ Azure OpenAI       │      │
+│   │ Workspaces         │   │ (ARM API)          │   │ (Query Generation) │      │
+│   │ • Perf metrics     │   │ • VM inventory     │   │ • KQL generation   │      │
+│   │ • Multi-tenant     │   │ • Cross-tenant     │   │ • Result synthesis │      │
+│   └────────────────────┘   └────────────────────┘   └────────────────────┘      │
+│                                                                                 │
+│   ┌────────────────────┐   ┌────────────────────┐   ┌────────────────────┐      │
+│   │ Key Vault          │   │ Table Storage      │   │ SendGrid           │      │
+│   │ • All secrets      │   │ • Tenant configs   │   │ • Email delivery   │      │
+│   │ • Per-tenant creds │   │ • Run history      │   │ • Large results    │      │
+│   └────────────────────┘   └────────────────────┘   └────────────────────┘      │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow: Dynamic Query (v9)
+
+```
+User                    Slack Bot               Orchestrator           Azure Services
+  │                         │                         │                      │
+  │ "Show VMs with          │                         │                      │
+  │  high CPU in eastus"    │                         │                      │
+  │────────────────────────▶│                         │                      │
+  │                         │                         │                      │
+  │                         │ 1. Detect query type    │                      │
+  │                         │    (KQL vs Resource     │                      │
+  │                         │    Graph)               │                      │
+  │                         │                         │                      │
+  │                         │ 2. Generate KQL         │                      │
+  │                         │    via OpenAI           │                      │
+  │                         │─────────────────────────┼─────────────────────▶│
+  │                         │                         │    Azure OpenAI      │
+  │                         │◀────────────────────────┼──────────────────────│
+  │                         │    KQL Query            │                      │
+  │                         │                         │                      │
+  │                         │ 3. POST /api/query/     │                      │
+  │                         │    dynamic-kql          │                      │
+  │                         │────────────────────────▶│                      │
+  │                         │                         │                      │
+  │                         │                         │ 4. Validate query    │
+  │                         │                         │    (security checks) │
+  │                         │                         │                      │
+  │                         │                         │ 5. Execute against   │
+  │                         │                         │    Log Analytics     │
+  │                         │                         │─────────────────────▶│
+  │                         │                         │◀─────────────────────│
+  │                         │                         │    Raw results       │
+  │                         │                         │                      │
+  │                         │◀────────────────────────│                      │
+  │                         │    Results              │                      │
+  │                         │                         │                      │
+  │                         │ 6. Format for Slack     │                      │
+  │                         │    (≤50 rows: inline)   │                      │
+  │                         │    (>50 rows: email)    │                      │
+  │                         │                         │                      │
+  │◀────────────────────────│                         │                      │
+  │    Formatted response   │                         │                      │
+  │                         │                         │                      │
+```
+
+### API Endpoints (v9)
+
+#### Orchestrator (`vmperf-orchestrator`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/orchestrate` | POST | Trigger full performance analysis run |
+| `/api/runs/latest/summary` | GET | Get latest run summary |
+| `/api/vms/status/:status` | GET | Get VMs by status (UNDERUTILIZED, OVERUTILIZED, etc.) |
+| `/api/subscriptions` | GET | List all accessible subscriptions |
+| `/api/subscriptions/search` | GET | Search subscriptions by name |
+| `/api/query/dynamic-kql` | POST | Execute validated KQL query |
+| `/api/query/dynamic-resourcegraph` | POST | Execute validated Resource Graph query |
+| `/api/query/format` | POST | Format query results for display |
+| `/api/query/email-results` | POST | Send large results via email |
+| `/api/reports/latest/download` | GET | Get download links for latest reports |
+
+#### Slack Bot (`vmperf-slack-bot`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/slack/events` | POST | Slack Events API endpoint |
+| `/api/messages` | POST | Bot Framework messages (Teams) |
+
+### Query Validation Security (v9)
+
+The dynamic query system includes multiple security layers:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Query Validation Pipeline                    │
+│                                                                 │
+│  Input: AI-generated KQL query                                  │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ 1. Table Whitelist Check                                │    │
+│  │    Allowed: Perf, Heartbeat, AzureDiagnostics,          │    │
+│  │    InsightsMetrics, VMProcess, VMConnection, Event,     │    │
+│  │    Syslog, AzureMetrics                                 │    │
+│  │    ❌ BLOCK if table not in whitelist                   │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ 2. Dangerous Operations Check                           │    │
+│  │    Block: .delete, .set, .append, .ingest, .alter,      │    │
+│  │    .drop, .execute, external_data, materialize,         │    │
+│  │    union *, .set-or-append, .set-or-replace             │    │
+│  │    ❌ BLOCK if dangerous operation detected             │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ 3. Injection Pattern Detection                          │    │
+│  │    Warn: '; (quote+semicolon), ' | union, print,        │    │
+│  │    toscalar+getschema, multiple statements              │    │
+│  │    ⚠️ WARNING logged (may not block)                    │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ 4. Comment Stripping & Sanitization                     │    │
+│  │    Remove: /* */, //, -- comments                       │    │
+│  │    Output: Sanitized query                              │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ 5. Execution Limits                                     │    │
+│  │    • Max results: 1000 rows (configurable)              │    │
+│  │    • Timeout: 60 seconds (max 5 minutes)                │    │
+│  │    • Time filter warning if missing                     │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│         │                                                       │
+│         ▼                                                       │
+│  Output: Validated & sanitized query OR error response          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Auto-Detect Delivery (v9)
+
+Results are automatically delivered via the appropriate channel:
+
+| Row Count | Delivery Method | User Experience |
+|-----------|-----------------|-----------------|
+| ≤50 rows | Slack inline | Formatted table in chat |
+| >50 rows | Email | "Results sent to your email" + summary |
+
+### Key Vault Secrets (v9)
+
+| Secret Name | Description |
+|-------------|-------------|
+| `LogAnalyticsWorkspaceId` | Default workspace ID |
+| `LogAnalyticsTenantId` | Default tenant ID |
+| `LogAnalyticsClientId` | Service principal client ID |
+| `LogAnalyticsClientSecret` | Service principal secret |
+| `TargetSubscriptionId` | Default subscription ID |
+| `OpenAIEndpoint` | Azure OpenAI endpoint URL |
+| `OpenAIApiKey` | Azure OpenAI API key |
+| `OpenAIDeploymentName` | OpenAI model deployment (default: gpt-4) |
+| `SendGridApiKey` | SendGrid API key for email |
+| `EmailAddress` | Default email recipient |
+| `StorageConnectionString` | Azure Storage connection |
+| `Slack-BotToken` | Slack bot OAuth token |
+| `{TenantName}-ClientId` | Per-tenant SP client ID |
+| `{TenantName}-ClientSecret` | Per-tenant SP secret |
+
+### Slack Bot Commands (v9)
+
+| Command | Description |
+|---------|-------------|
+| `hello` / `hi` / `help` | Show welcome message and subscription list |
+| `<subscription name>` | Select subscription context |
+| `show underutilized vms` | List VMs that can be downsized |
+| `show overutilized vms` | List VMs needing more resources |
+| `show summary` | Performance overview for selected subscription |
+| `run a performance report` | Trigger full analysis run |
+| `investigate <vm-name>` | Get details for specific VM |
+| `download` | Get report download links |
+| `clear` | Clear subscription context |
+
+### Component Versions
+
+| Component | Current Version | Description |
+|-----------|-----------------|-------------|
+| vmperf-orchestrator | 2.0.0 | Backend API and query execution |
+| vmperf-slack-bot | 2.0.0 | Slack integration and command handling |
+| Dynamic Query System | v9 | AI-generated KQL and Resource Graph queries |
+
+---
+
+## Legacy Architecture (Logic Apps)
+
+The following sections describe the original Logic Apps-based architecture, which is still supported but not actively developed.
 
 ### High-Level Architecture Diagram
 
