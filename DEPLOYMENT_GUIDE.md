@@ -103,6 +103,134 @@ az containerapp revision show --name vmperf-orchestrator --resource-group Sai-Te
 
 ---
 
+## Release Management & Rollback
+
+### Git Tagging Strategy
+
+We use annotated git tags to mark stable releases. This enables quick rollback if a new deployment causes issues.
+
+**Tag Naming Convention**: `v<major>-<descriptor>` or `v<major>-fix<number>`
+- `v10-fixes` - Major feature release with fixes
+- `v10-fix2` - Incremental bug fix
+- `v10-fix3` - Another incremental bug fix
+
+### Creating a Release Tag
+
+After testing a deployment and confirming it's stable, create an annotated tag:
+
+```bash
+# Create annotated tag with release notes
+git tag -a v10-fix3 -m "Release v10-fix3 - Temperature parameter fix
+
+Changes:
+- Removed temperature parameter from Azure OpenAI API calls
+- Newer Azure OpenAI models (o1 series) only support default temperature (1)
+- Fixed BadRequestError: 400 Unsupported value: temperature does not support 0.3
+
+Deployed:
+- vmperf-orchestrator:v10-fixes (2.0 CPU / 4.0 Gi)
+- vmperf-slack-bot:v10-fix3 (1.0 CPU / 2.0 Gi)
+"
+
+# Push tag to remote repository
+git push origin v10-fix3
+```
+
+### Listing Available Tags
+
+```bash
+# List all tags with dates
+git tag -l --format='%(refname:short) - %(creatordate:short) - %(subject)'
+
+# Show details of a specific tag
+git show v10-fix3
+
+# List tags matching a pattern
+git tag -l "v10*"
+```
+
+### Rollback Procedures
+
+#### Option 1: Checkout Tag and Redeploy (Recommended)
+
+When a new deployment causes issues, rollback to a known stable tag:
+
+```bash
+# 1. Checkout the stable tag
+git checkout v10-fix3
+
+# 2. Rebuild and deploy containers from this code
+cd container-app
+az acr build --registry ca0bf4270c7eacr --image vmperf-orchestrator:v10-fix3 .
+
+cd ../slack-bot
+az acr build --registry ca0bf4270c7eacr --image vmperf-slack-bot:v10-fix3 .
+
+# 3. Update container apps to use the tagged images
+TIMESTAMP=$(date +%Y%m%d-%H%M)
+
+az containerapp update --name vmperf-orchestrator --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-orchestrator:v10-fix3 \
+  --revision-suffix "rollback-$TIMESTAMP"
+
+az containerapp update --name vmperf-slack-bot --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-slack-bot:v10-fix3 \
+  --revision-suffix "rollback-$TIMESTAMP"
+
+# 4. Verify health
+curl https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/health
+curl https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health
+
+# 5. Return to main branch for future development
+git checkout main
+```
+
+#### Option 2: Create Hotfix Branch from Tag
+
+If you need to make a small fix on top of a stable release:
+
+```bash
+# Create a branch from the stable tag
+git checkout -b hotfix/v10-fix4 v10-fix3
+
+# Make your fixes...
+# Then commit and tag the hotfix
+git commit -am "Hotfix: description of fix"
+git tag -a v10-fix4 -m "Hotfix release v10-fix4"
+git push origin hotfix/v10-fix4 --tags
+```
+
+#### Option 3: Reset Main to Tag (Emergency Only)
+
+**Warning**: This rewrites history. Only use if you need to completely abandon commits after a tag.
+
+```bash
+# Reset main branch to the stable tag
+git checkout main
+git reset --hard v10-fix3
+git push --force-with-lease origin main
+```
+
+### Current Release Tags
+
+| Tag | Date | Status | Description |
+|-----|------|--------|-------------|
+| `v10-fix3` | 2026-02-03 | ✅ Stable | Temperature parameter fix |
+| `v10-fix2` | 2026-02-03 | ✅ Stable | max_completion_tokens fix |
+| `v10-fixes` | 2026-02-02 | ✅ Stable | Agent verbosity, export CSV, VM name matching |
+| `v9-dynamic-queries` | 2026-01-28 | ✅ Stable | Dynamic query system |
+
+### Best Practices
+
+1. **Always tag stable releases** before deploying new changes
+2. **Use annotated tags** (`-a` flag) with descriptive messages
+3. **Test thoroughly** before tagging - tags should represent tested, working code
+4. **Document changes** in both the tag message and CHANGELOG.md
+5. **Keep images tagged** in ACR matching git tags for easy rollback
+6. **Never delete tags** that have been pushed to production
+
+---
+
 ## Prerequisites
 
 ### 1. Azure Resources

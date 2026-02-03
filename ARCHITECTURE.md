@@ -262,6 +262,25 @@ Results are automatically delivered via the appropriate channel:
 - **Export functionality**: CSV export via email with user profile lookup
 - **VM name matching**: Case-insensitive, FQDN-aware matching in KQL queries
 
+### Release Management
+
+Stable releases are tagged in git for rollback capability. Each tag represents a tested, working state.
+
+| Tag | Date | Components | Notes |
+|-----|------|------------|-------|
+| `v10-fix3` | 2026-02-03 | orchestrator:v10-fixes, slack-bot:v10-fix3 | Temperature parameter fix |
+| `v10-fix2` | 2026-02-03 | orchestrator:v10-fixes, slack-bot:v10-fix2 | max_completion_tokens fix |
+| `v10-fixes` | 2026-02-02 | orchestrator:v10-fixes, slack-bot:v10-fixes | Verbosity, export, VM matching |
+| `v9-dynamic-queries` | 2026-01-28 | orchestrator:v9, slack-bot:v9 | Dynamic query system |
+
+**Rollback Process:**
+1. Checkout stable tag: `git checkout v10-fix3`
+2. Rebuild containers: `az acr build --registry ca0bf4270c7eacr --image vmperf-slack-bot:v10-fix3 .`
+3. Update container apps with tagged image
+4. Return to main branch: `git checkout main`
+
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md#release-management--rollback) for detailed rollback procedures.
+
 ---
 
 ## Legacy Architecture (Logic Apps)
