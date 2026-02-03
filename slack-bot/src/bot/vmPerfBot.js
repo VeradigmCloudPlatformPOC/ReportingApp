@@ -12,7 +12,7 @@
  */
 
 const { ActivityHandler } = require('botbuilder');
-const { OpenAIClient, AzureKeyCredential } = require('@azure/openai');
+const { AzureOpenAI } = require('openai');
 const { createAgentService } = require('../services/agentService');
 const { createConversationState } = require('../services/conversationState');
 const { channelAdapter } = require('./channelAdapter');
@@ -34,8 +34,9 @@ class VMPerfBot extends ActivityHandler {
         this.agentService = null;
         this.conversationState = createConversationState(config);
 
-        // Flag to track if agent is available
-        this.agentAvailable = !!config.aiFoundry?.agentId;
+        // Flag to track if agent is available (will be updated during initialization)
+        // Check for either AI Foundry Agent OR OpenAI for dynamic queries
+        this.agentAvailable = !!(config.aiFoundry?.agentId || (config.openai?.endpoint && config.openai?.apiKey));
 
         // Subscription context per user/channel - tracks selected subscription for queries
         // Key format: `${userId}_${channelId}` -> { subscriptionId, subscriptionName, tenantName, tenantId }
@@ -62,33 +63,42 @@ class VMPerfBot extends ActivityHandler {
 
     /**
      * Initialize the agent service lazily.
+     * Creates Azure OpenAI client for dynamic query generation even if AI Foundry Agent isn't configured.
      */
     async initializeAgent() {
         if (this.agentService) return;
 
-        if (!this.agentAvailable) {
-            console.log('Agent service not configured - using fallback mode');
-            return;
-        }
-
         try {
             // Create Azure OpenAI client for dynamic query generation
+            // This is separate from the AI Foundry Agent - it's used for generating KQL queries
             let aiClient = null;
             if (this.config.openai?.endpoint && this.config.openai?.apiKey) {
-                aiClient = new OpenAIClient(
-                    this.config.openai.endpoint,
-                    new AzureKeyCredential(this.config.openai.apiKey)
-                );
+                const deploymentName = this.config.openai.deploymentName || 'gpt-4';
+                aiClient = new AzureOpenAI({
+                    endpoint: this.config.openai.endpoint,
+                    apiKey: this.config.openai.apiKey,
+                    apiVersion: '2024-06-01',
+                    deployment: deploymentName
+                });
                 // Store deployment name for use in API calls
-                aiClient.deploymentName = this.config.openai.deploymentName || 'gpt-4';
+                aiClient.deploymentName = deploymentName;
                 console.log('Azure OpenAI client created for dynamic query generation');
+                console.log(`  Endpoint: ${this.config.openai.endpoint}`);
+                console.log(`  Deployment: ${deploymentName}`);
             } else {
                 console.warn('Azure OpenAI not configured - dynamic query tools will not be available');
+                console.warn(`  Endpoint: ${this.config.openai?.endpoint ? 'SET' : 'NOT SET'}`);
+                console.warn(`  API Key: ${this.config.openai?.apiKey ? 'SET' : 'NOT SET'}`);
             }
 
+            // Create agent service - works with or without AI Foundry Agent
+            // If AI Foundry Agent isn't available, uses fallback command handling
             this.agentService = createAgentService(this.config, this.orchestrationClient, aiClient);
             await this.agentService.initialize();
             console.log('Agent service initialized successfully');
+
+            // Update agentAvailable based on whether we have any AI capability
+            this.agentAvailable = !!(this.config.aiFoundry?.agentId || aiClient);
         } catch (error) {
             console.error('Failed to initialize agent service:', error.message);
             this.agentAvailable = false;
