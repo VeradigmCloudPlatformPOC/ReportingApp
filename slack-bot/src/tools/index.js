@@ -185,7 +185,7 @@ function getToolDefinitions() {
             type: 'function',
             function: {
                 name: 'query_inventory',
-                description: 'Query the current VM inventory from Azure Resource Graph. Returns VMs with their configuration (size, location, tags) but not performance metrics.',
+                description: 'Query the current VM inventory from Azure Resource Graph. Returns VMs with their configuration (size, location, tags). Use include_details=true for full info including OS/data disk sizes, private IP, VNET/subnet, and creation date.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -208,6 +208,11 @@ function getToolDefinitions() {
                         size_pattern: {
                             type: 'string',
                             description: 'Filter by VM size pattern (e.g., "Standard_D", "Standard_E", "B-series")'
+                        },
+                        include_details: {
+                            type: 'boolean',
+                            description: 'Set to true to include full VM details: OS info, disk sizes (OS and data), private IP, VNET/subnet, and creation date',
+                            default: false
                         }
                     }
                 }

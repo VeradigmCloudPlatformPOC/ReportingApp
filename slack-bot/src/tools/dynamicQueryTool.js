@@ -177,13 +177,19 @@ function createDynamicQueryTool(orchestrationClient, aiClient) {
                 result = await orchestrationClient.executeDynamicKql(generatedQuery, {
                     maxResults: max_results,
                     userId: context.userId,
-                    channel: context.channel
+                    channel: context.channel,
+                    // Pass subscription/tenant context for workspace lookup
+                    subscriptionId: context.subscriptionId,
+                    tenantId: context.tenantId
                 });
             } else {
                 result = await orchestrationClient.executeDynamicResourceGraph(generatedQuery, {
                     maxResults: max_results,
                     userId: context.userId,
-                    channel: context.channel
+                    channel: context.channel,
+                    // Pass subscription/tenant context for Resource Graph scoping
+                    subscriptionIds: context.subscriptionId ? [context.subscriptionId] : undefined,
+                    tenantId: context.tenantId
                 });
             }
 
@@ -279,7 +285,7 @@ async function generateKqlQuery(aiClient, userRequest, context = {}) {
             { role: 'system', content: KQL_GENERATION_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt }
         ],
-        max_tokens: 1000,
+        max_completion_tokens: 1000,
         temperature: 0.3 // Lower temperature for more consistent query generation
     });
 
@@ -303,7 +309,7 @@ async function generateResourceGraphQuery(aiClient, userRequest, context = {}) {
             { role: 'system', content: RESOURCE_GRAPH_GENERATION_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt }
         ],
-        max_tokens: 1000,
+        max_completion_tokens: 1000,
         temperature: 0.3
     });
 
@@ -334,7 +340,7 @@ async function synthesizeResults(aiClient, originalRequest, queryType, results, 
             { role: 'system', content: RESULT_SYNTHESIS_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt }
         ],
-        max_tokens: 1500,
+        max_completion_tokens: 1500,
         temperature: 0.5
     });
 

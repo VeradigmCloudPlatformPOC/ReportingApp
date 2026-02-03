@@ -895,8 +895,12 @@ app.get('/api/inventory', async (req, res) => {
         const filters = {
             tenantName: req.query.tenantName,
             location: req.query.location,
-            sizePattern: req.query.sizePattern
+            sizePattern: req.query.sizePattern,
+            subscriptionId: req.query.subscriptionId
         };
+
+        // Whether to include full network details (Private IP, VNET/SNET)
+        const includeNetwork = req.query.includeNetwork === 'true';
 
         if (req.query.tagKey && req.query.tagValue) {
             filters.tag = { key: req.query.tagKey, value: req.query.tagValue };
@@ -907,7 +911,26 @@ app.get('/api/inventory', async (req, res) => {
             if (filters[key] === undefined) delete filters[key];
         });
 
-        const inventory = await queryAllTenantsInventory(tenantsWithCredentials, filters);
+        // Log subscription filter if present
+        if (filters.subscriptionId) {
+            console.log(`Inventory query filtered by subscriptionId: ${filters.subscriptionId}`);
+        }
+
+        let inventory;
+        if (includeNetwork) {
+            console.log('Including network details in inventory query...');
+            // Use enhanced query that includes network details
+            const { queryVMInventoryWithNetwork } = require('./services/resourceGraph');
+            inventory = [];
+            for (const tenant of tenantsWithCredentials) {
+                const tenantVMs = await queryVMInventoryWithNetwork(tenant, filters);
+                inventory.push(...tenantVMs);
+            }
+        } else {
+            // Use standard inventory query
+            inventory = await queryAllTenantsInventory(tenantsWithCredentials, filters);
+        }
+
         res.json(inventory);
     } catch (error) {
         console.error('Error getting inventory:', error);
@@ -1326,10 +1349,31 @@ app.post('/api/query/dynamic-kql', async (req, res) => {
 
         console.log(`[DynamicKQL] Executing query from ${channel || 'api'} user ${userId || 'unknown'}`);
 
+        // Look up workspace ID from tenant config if not explicitly provided
+        let effectiveWorkspaceId = workspaceId;
+        let effectiveTenantId = tenantId;
+
+        if (!effectiveWorkspaceId && tenantId) {
+            try {
+                const { getTenantConfig } = require('./services/storageService');
+                const tenantConfig = await getTenantConfig(tenantId);
+                if (tenantConfig) {
+                    effectiveTenantId = tenantConfig.tenantId;
+                    if (tenantConfig.logAnalyticsWorkspaces && tenantConfig.logAnalyticsWorkspaces.length > 0) {
+                        const workspace = tenantConfig.logAnalyticsWorkspaces[0];
+                        effectiveWorkspaceId = typeof workspace === 'string' ? workspace : workspace.workspaceId;
+                        console.log(`[DynamicKQL] Using workspace for tenant ${tenantConfig.tenantName}: ${effectiveWorkspaceId}`);
+                    }
+                }
+            } catch (err) {
+                console.warn(`[DynamicKQL] Could not find tenant config for ${tenantId}: ${err.message}`);
+            }
+        }
+
         const result = await executeDynamicKqlQuery(
             query,
             secrets,
-            { subscriptionId, workspaceId, tenantId, maxResults, timeoutMs },
+            { subscriptionId, workspaceId: effectiveWorkspaceId, tenantId: effectiveTenantId, maxResults, timeoutMs },
             { userId, channel }
         );
 
@@ -1451,6 +1495,9 @@ app.post('/api/query/email-results', async (req, res) => {
     }
 
     try {
+        // Load secrets from Key Vault (CRITICAL: was missing, caused email failures)
+        const secrets = await loadSecrets();
+
         // Import email service
         const { sendEmail } = require('./services/emailService');
 

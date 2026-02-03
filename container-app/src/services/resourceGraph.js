@@ -48,6 +48,7 @@ function getCredentialForTenant(tenantConfig) {
  * @param {Object} tenantConfig.tenantId - Azure AD tenant ID for OAuth
  * @param {Object} tenantConfig.credentials - Optional credentials object {clientId, clientSecret}
  * @param {Object} filters - Optional filters to apply
+ * @param {string} filters.subscriptionId - Filter by specific subscription ID
  * @param {string} filters.resourceGroup - Filter by resource group name
  * @param {Object} filters.tag - Filter by tag {key, value}
  * @param {string} filters.location - Filter by Azure region
@@ -62,6 +63,11 @@ async function queryVMInventory(tenantConfig, filters = {}) {
 
     // Build filter clauses
     const filterClauses = [];
+
+    // Filter by subscription ID if provided
+    if (filters.subscriptionId) {
+        filterClauses.push(`| where subscriptionId == '${escapeKql(filters.subscriptionId)}'`);
+    }
 
     if (filters.resourceGroup) {
         filterClauses.push(`| where resourceGroup =~ '${escapeKql(filters.resourceGroup)}'`);
@@ -85,7 +91,8 @@ async function queryVMInventory(tenantConfig, filters = {}) {
         filterClauses.push(`| where tostring(properties.extended.instanceView.powerState.code) contains '${escapeKql(filters.powerState)}'`);
     }
 
-    // Build the query
+    // Build the query with extended properties
+    // Note: Network details require a separate query as they're in different resource types
     const query = `
         Resources
         | where type == 'microsoft.compute/virtualmachines'
@@ -93,8 +100,16 @@ async function queryVMInventory(tenantConfig, filters = {}) {
         | extend vmSize = tostring(properties.hardwareProfile.vmSize)
         | extend osType = tostring(properties.storageProfile.osDisk.osType)
         | extend osSku = tostring(properties.storageProfile.imageReference.sku)
+        | extend osPublisher = tostring(properties.storageProfile.imageReference.publisher)
+        | extend osVersion = tostring(properties.storageProfile.imageReference.version)
         | extend powerState = tostring(properties.extended.instanceView.powerState.code)
         | extend provisioningState = tostring(properties.provisioningState)
+        | extend timeCreated = tostring(properties.timeCreated)
+        | extend osDiskSizeGB = toint(properties.storageProfile.osDisk.diskSizeGB)
+        | extend osDiskName = tostring(properties.storageProfile.osDisk.name)
+        | extend dataDisks = properties.storageProfile.dataDisks
+        | extend dataDiskCount = array_length(properties.storageProfile.dataDisks)
+        | extend networkInterfaces = properties.networkProfile.networkInterfaces
         | project
             id,
             name,
@@ -104,38 +119,218 @@ async function queryVMInventory(tenantConfig, filters = {}) {
             vmSize,
             osType,
             osSku,
+            osPublisher,
+            osVersion,
             powerState,
             provisioningState,
+            timeCreated,
+            osDiskSizeGB,
+            osDiskName,
+            dataDisks,
+            dataDiskCount,
+            networkInterfaces,
             tags
         | order by name asc
         ${filters.limit ? `| take ${filters.limit}` : ''}
     `;
 
     console.log(`  Querying Resource Graph for ${tenantConfig.tenantName}...`);
+    if (filters.subscriptionId) {
+        console.log(`  Filtering by subscriptionId: ${filters.subscriptionId}`);
+    }
 
     const result = await client.resources({
         subscriptions: tenantConfig.subscriptionIds,
         query: query
     });
 
-    // Transform results to consistent format
-    const vms = (result.data || []).map(vm => ({
-        tenantId: tenantConfig.tenantId,
-        tenantName: tenantConfig.tenantName,
-        subscriptionId: vm.subscriptionId,
-        resourceGroup: vm.resourceGroup,
-        vmName: vm.name,
-        vmId: vm.id,
-        vmSize: vm.vmSize,
-        location: vm.location,
-        osType: vm.osType,
-        osSku: vm.osSku,
-        powerState: vm.powerState?.replace('PowerState/', '') || 'unknown',
-        provisioningState: vm.provisioningState,
-        tags: vm.tags || {}
-    }));
+    // Transform results to consistent format with enhanced details
+    const vms = (result.data || []).map(vm => {
+        // Calculate total data disk size
+        const dataDisks = vm.dataDisks || [];
+        const dataDiskTotalGB = dataDisks.reduce((sum, disk) => sum + (disk.diskSizeGB || 0), 0);
+
+        // Extract network interface IDs for later lookup
+        const nicIds = (vm.networkInterfaces || []).map(nic => nic.id);
+
+        return {
+            tenantId: tenantConfig.tenantId,
+            tenantName: tenantConfig.tenantName,
+            subscriptionId: vm.subscriptionId,
+            resourceGroup: vm.resourceGroup,
+            vmName: vm.name,
+            vmId: vm.id,
+            vmSize: vm.vmSize,
+            location: vm.location,
+            // OS Info
+            osType: vm.osType,
+            osSku: vm.osSku,
+            osPublisher: vm.osPublisher,
+            osVersion: vm.osVersion,
+            osFullName: vm.osPublisher ? `${vm.osPublisher} ${vm.osSku}` : vm.osSku,
+            // Power State
+            powerState: vm.powerState?.replace('PowerState/', '') || 'unknown',
+            provisioningState: vm.provisioningState,
+            // Timestamps
+            timeCreated: vm.timeCreated,
+            // Disk Info
+            osDisk: {
+                name: vm.osDiskName,
+                sizeGB: vm.osDiskSizeGB
+            },
+            dataDisks: dataDisks.map(disk => ({
+                name: disk.name,
+                sizeGB: disk.diskSizeGB,
+                lun: disk.lun
+            })),
+            dataDiskCount: vm.dataDiskCount || 0,
+            dataDiskTotalGB: dataDiskTotalGB,
+            totalDiskGB: (vm.osDiskSizeGB || 0) + dataDiskTotalGB,
+            // Network Info (IDs only - full details require separate query)
+            networkInterfaceIds: nicIds,
+            // Tags
+            tags: vm.tags || {}
+        };
+    });
 
     console.log(`  Found ${vms.length} VMs in ${tenantConfig.tenantName}`);
+    return vms;
+}
+
+/**
+ * Query network interface details for VMs.
+ * Returns Private IPs, VNET, and Subnet information.
+ *
+ * @param {Object} tenantConfig - Tenant configuration
+ * @param {Array<string>} nicIds - Optional: specific NIC IDs to query
+ * @returns {Promise<Object>} Map of NIC ID to network details
+ */
+async function queryNetworkDetails(tenantConfig, nicIds = []) {
+    const credential = getCredentialForTenant(tenantConfig);
+    const client = new ResourceGraphClient(credential);
+
+    // Build filter for specific NICs if provided
+    const nicFilter = nicIds.length > 0
+        ? `| where id in~ (${nicIds.map(id => `'${escapeKql(id)}'`).join(', ')})`
+        : '';
+
+    const query = `
+        Resources
+        | where type == 'microsoft.network/networkinterfaces'
+        ${nicFilter}
+        | extend ipConfigs = properties.ipConfigurations
+        | mv-expand ipConfig = ipConfigs
+        | extend privateIP = tostring(ipConfig.properties.privateIPAddress)
+        | extend privateIPAllocation = tostring(ipConfig.properties.privateIPAllocationMethod)
+        | extend subnetId = tostring(ipConfig.properties.subnet.id)
+        | extend publicIPId = tostring(ipConfig.properties.publicIPAddress.id)
+        | extend vmId = tostring(properties.virtualMachine.id)
+        | project
+            nicId = id,
+            nicName = name,
+            vmId,
+            privateIP,
+            privateIPAllocation,
+            subnetId,
+            publicIPId
+    `;
+
+    const result = await client.resources({
+        subscriptions: tenantConfig.subscriptionIds,
+        query: query
+    });
+
+    // Transform into a map keyed by vmId for easy lookup
+    const networkDetailsByVm = {};
+
+    for (const nic of (result.data || [])) {
+        const vmId = nic.vmId?.toLowerCase();
+        if (!vmId) continue;
+
+        // Parse subnet ID to get VNET and Subnet names
+        // Format: /subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/{vnet}/subnets/{subnet}
+        let vnetName = null;
+        let subnetName = null;
+
+        if (nic.subnetId) {
+            const subnetMatch = nic.subnetId.match(/virtualNetworks\/([^/]+)\/subnets\/([^/]+)/i);
+            if (subnetMatch) {
+                vnetName = subnetMatch[1];
+                subnetName = subnetMatch[2];
+            }
+        }
+
+        if (!networkDetailsByVm[vmId]) {
+            networkDetailsByVm[vmId] = {
+                primaryPrivateIP: nic.privateIP,
+                privateIPs: [],
+                vnet: vnetName,
+                subnet: subnetName,
+                nics: []
+            };
+        }
+
+        networkDetailsByVm[vmId].privateIPs.push(nic.privateIP);
+        networkDetailsByVm[vmId].nics.push({
+            nicId: nic.nicId,
+            nicName: nic.nicName,
+            privateIP: nic.privateIP,
+            privateIPAllocation: nic.privateIPAllocation,
+            vnet: vnetName,
+            subnet: subnetName,
+            hasPublicIP: !!nic.publicIPId
+        });
+    }
+
+    return networkDetailsByVm;
+}
+
+/**
+ * Query VM inventory with full network details.
+ * Combines VM data with network interface information.
+ *
+ * @param {Object} tenantConfig - Tenant configuration
+ * @param {Object} filters - Optional filters
+ * @returns {Promise<Array>} VMs with full details including network
+ */
+async function queryVMInventoryWithNetwork(tenantConfig, filters = {}) {
+    // Get basic VM inventory
+    const vms = await queryVMInventory(tenantConfig, filters);
+
+    // Get all NIC IDs from VMs
+    const allNicIds = [];
+    for (const vm of vms) {
+        if (vm.networkInterfaceIds) {
+            allNicIds.push(...vm.networkInterfaceIds);
+        }
+    }
+
+    // Query network details if there are NICs
+    let networkDetails = {};
+    if (allNicIds.length > 0) {
+        networkDetails = await queryNetworkDetails(tenantConfig, allNicIds);
+    }
+
+    // Enrich VMs with network details
+    for (const vm of vms) {
+        const vmIdLower = vm.vmId?.toLowerCase();
+        const netInfo = networkDetails[vmIdLower];
+
+        if (netInfo) {
+            vm.privateIP = netInfo.primaryPrivateIP;
+            vm.privateIPs = netInfo.privateIPs;
+            vm.vnet = netInfo.vnet;
+            vm.subnet = netInfo.subnet;
+            vm.networkDetails = netInfo.nics;
+        } else {
+            vm.privateIP = null;
+            vm.privateIPs = [];
+            vm.vnet = null;
+            vm.subnet = null;
+            vm.networkDetails = [];
+        }
+    }
+
     return vms;
 }
 
@@ -423,6 +618,8 @@ function sortByValue(obj) {
 
 module.exports = {
     queryVMInventory,
+    queryVMInventoryWithNetwork,
+    queryNetworkDetails,
     queryVMsByTag,
     queryVMsByLocation,
     queryVMsBySize,

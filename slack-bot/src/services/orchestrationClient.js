@@ -116,11 +116,13 @@ class OrchestrationClient {
      * Get VMs filtered by status from latest run.
      *
      * @param {string} status - Status to filter by (UNDERUTILIZED, OVERUTILIZED, OPTIMAL)
+     * @param {string} subscriptionId - Optional subscription ID to filter by
      * @returns {Promise<Array>} Array of VM analyses
      */
-    async getVMsByStatus(status) {
+    async getVMsByStatus(status, subscriptionId = null) {
         try {
-            const response = await this.client.get(`/api/vms/status/${status}`);
+            const params = subscriptionId ? { subscriptionId } : {};
+            const response = await this.client.get(`/api/vms/status/${status}`, { params });
             return response.data;
         } catch (error) {
             console.error('Failed to get VMs by status:', error.message);
@@ -172,12 +174,16 @@ class OrchestrationClient {
      * @param {string} filters.location - Filter by location
      * @param {Object} filters.tag - Filter by tag {key, value}
      * @param {string} filters.sizePattern - Filter by size pattern
+     * @param {boolean} filters.includeNetwork - Include network details (Private IP, VNET/SNET)
      * @returns {Promise<Array>} VM inventory
      */
     async getInventory(filters = {}) {
         try {
             const response = await this.client.get(`/api/inventory`, {
-                params: filters
+                params: {
+                    ...filters,
+                    includeNetwork: filters.includeNetwork ? 'true' : undefined
+                }
             });
             return response.data;
         } catch (error) {

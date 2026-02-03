@@ -2,9 +2,10 @@
  * @fileoverview Query Inventory Tool
  *
  * Queries VM inventory from Azure Resource Graph with optional filters.
- * Returns current VM configuration without performance metrics.
+ * Returns current VM configuration. Can include enhanced details like
+ * network info, disk sizes, and creation dates.
  *
- * @version v8-agent
+ * @version v9-dynamic-queries
  */
 
 /**
@@ -23,16 +24,32 @@ function createQueryInventoryTool(orchestrationClient) {
      * @param {string} [args.tag_key] - Filter by tag key
      * @param {string} [args.tag_value] - Filter by tag value
      * @param {string} [args.size_pattern] - Filter by VM size pattern
+     * @param {string} [args.subscription_id] - Filter by subscription ID
+     * @param {boolean} [args.include_details] - Include full details (network, disks, creation date)
+     * @param {Object} context - Context with subscription info from user's selection
      * @returns {Promise<Object>} Inventory results
      */
-    return async function queryInventory({ tenant_name, location, tag_key, tag_value, size_pattern }) {
+    return async function queryInventory({ tenant_name, location, tag_key, tag_value, size_pattern, subscription_id, include_details = false }, context = {}) {
         try {
             // Build filters object
             const filters = {};
 
+            // Use subscription from context if not explicitly provided
+            const effectiveSubscriptionId = subscription_id || context.subscriptionId;
+            if (effectiveSubscriptionId) {
+                filters.subscriptionId = effectiveSubscriptionId;
+                console.log(`Using subscription context: ${context.subscriptionName || effectiveSubscriptionId}`);
+            }
+
             if (tenant_name) filters.tenantName = tenant_name;
             if (location) filters.location = location;
             if (size_pattern) filters.sizePattern = size_pattern;
+
+            // Include network details when full details are requested
+            if (include_details) {
+                filters.includeNetwork = true;
+                console.log('Including full VM details (network, disks, etc.)');
+            }
 
             if (tag_key && tag_value) {
                 filters.tagKey = tag_key;
@@ -71,20 +88,59 @@ function createQueryInventoryTool(orchestrationClient) {
             });
 
             // Limit detailed results for readability
-            const limitedVMs = inventory.slice(0, 20).map(vm => ({
-                name: vm.vmName || vm.name,
-                resourceGroup: vm.resourceGroup,
-                size: vm.vmSize,
-                location: vm.location,
-                tenant: vm.tenantName || 'Default',
-                powerState: vm.powerState || 'unknown',
-                tags: vm.tags ? Object.keys(vm.tags).slice(0, 3).map(k => `${k}=${vm.tags[k]}`).join(', ') : 'none'
-            }));
+            const maxResults = include_details ? 10 : 20; // Fewer results when showing full details
+            const limitedVMs = inventory.slice(0, maxResults).map(vm => {
+                // Basic details always included
+                const vmDetails = {
+                    name: vm.vmName || vm.name,
+                    resourceGroup: vm.resourceGroup,
+                    size: vm.vmSize,
+                    location: vm.location,
+                    tenant: vm.tenantName || 'Default',
+                    powerState: vm.powerState || 'unknown'
+                };
+
+                // Enhanced details when requested
+                if (include_details) {
+                    // OS Info
+                    vmDetails.osInfo = {
+                        type: vm.osType,
+                        sku: vm.osSku,
+                        publisher: vm.osPublisher,
+                        full: vm.osFullName || `${vm.osType} ${vm.osSku}`
+                    };
+
+                    // Disk Info
+                    vmDetails.disks = {
+                        osDisk: vm.osDisk || { sizeGB: 'Unknown' },
+                        dataDisks: vm.dataDisks || [],
+                        dataDiskCount: vm.dataDiskCount || 0,
+                        totalDiskGB: vm.totalDiskGB || 'Unknown'
+                    };
+
+                    // Network Info
+                    vmDetails.network = {
+                        privateIP: vm.privateIP || 'Not available',
+                        privateIPs: vm.privateIPs || [],
+                        vnet: vm.vnet || 'Not available',
+                        subnet: vm.subnet || 'Not available'
+                    };
+
+                    // Timestamps
+                    vmDetails.created = vm.timeCreated || 'Unknown';
+                } else {
+                    // Minimal tags for basic view
+                    vmDetails.tags = vm.tags ? Object.keys(vm.tags).slice(0, 3).map(k => `${k}=${vm.tags[k]}`).join(', ') : 'none';
+                }
+
+                return vmDetails;
+            });
 
             return {
                 success: true,
                 totalCount: inventory.length,
                 showing: limitedVMs.length,
+                detailLevel: include_details ? 'full' : 'basic',
                 filtersApplied: Object.keys(filters).length > 0 ? filters : 'none',
                 summary: {
                     byTenant: Object.entries(tenantGroups).map(([name, vms]) => ({
@@ -97,7 +153,7 @@ function createQueryInventoryTool(orchestrationClient) {
                     }))
                 },
                 vms: limitedVMs,
-                hint: inventory.length > 20 ? `Showing 20 of ${inventory.length} VMs. Add more filters to narrow results.` : null
+                hint: inventory.length > maxResults ? `Showing ${maxResults} of ${inventory.length} VMs. Add more filters to narrow results.` : null
             };
         } catch (error) {
             console.error('Failed to query inventory:', error.message);

@@ -20,14 +20,29 @@ function createQueryVMsByStatusTool(orchestrationClient) {
      * @param {Object} args - Tool arguments
      * @param {string} args.status - Status to filter by
      * @param {number} [args.limit=10] - Maximum VMs to return
+     * @param {Object} context - Context with subscription info
      * @returns {Promise<Object>} VMs matching the status
      */
-    return async function queryVMsByStatus({ status, limit = 10 }) {
+    return async function queryVMsByStatus({ status, limit = 10 }, context = {}) {
         try {
             const normalizedStatus = status.toUpperCase();
             console.log(`Querying VMs with status: ${normalizedStatus}, limit: ${limit}`);
+            if (context.subscriptionId) {
+                console.log(`  Filtering by subscription: ${context.subscriptionName || context.subscriptionId}`);
+            }
 
-            const vms = await orchestrationClient.getVMsByStatus(normalizedStatus);
+            // Pass subscriptionId for server-side filtering if context is set
+            let vms = await orchestrationClient.getVMsByStatus(normalizedStatus, context.subscriptionId);
+            console.log(`  Found ${vms?.length || 0} VMs with status ${normalizedStatus}`);
+
+            // Double-check filter client-side as fallback (in case server doesn't filter)
+            if (vms && context.subscriptionId) {
+                const beforeCount = vms.length;
+                vms = vms.filter(vm => vm.subscriptionId === context.subscriptionId);
+                if (vms.length !== beforeCount) {
+                    console.log(`  Client-side filtered to ${vms.length} VMs`);
+                }
+            }
 
             if (!vms || vms.length === 0) {
                 return {

@@ -358,21 +358,35 @@ class VMPerfBot extends ActivityHandler {
             return;
         }
 
-        // If no context but is a known command, prompt to select subscription first
+        // If no context but is a known command, try to extract subscription from prompt
         if (!subContext && isKnownCommand) {
-            await this.sendSlackMessage(channel,
-                ':point_up: *Please select a subscription first!*\n\n' +
-                'Type a subscription name (e.g., "Zirconium") or say "hello" to see all available subscriptions.\n\n' +
-                '_Once you select a subscription, I can help with performance queries._',
-                slackConfig);
-            return;
+            // Try to extract subscription name from the prompt
+            const extractedSub = await this.extractAndMatchSubscription(cleanText, userId, channel, slackConfig);
+
+            if (extractedSub) {
+                // Found a matching subscription - set context and continue processing
+                console.log(`[Slack] Auto-matched subscription from prompt: ${extractedSub.subscriptionName}`);
+                // subContext is now set, fall through to process the query
+            } else {
+                // Could not extract or match subscription - ask for clarification
+                await this.sendSlackMessage(channel,
+                    ':point_up: *Please select a subscription first!*\n\n' +
+                    'Type a subscription name (e.g., "Zirconium") or say "hello" to see all available subscriptions.\n\n' +
+                    '_Once you select a subscription, I can help with performance queries._',
+                    slackConfig);
+                return;
+            }
         }
+
+        // Re-get subscription context in case it was just set
+        const effectiveSubContext = this.getSubscriptionContext(userId, channel);
 
         // User has subscription context - process the query
         let responseText;
 
         if (this.agentAvailable) {
-            responseText = await this.processSlackAgentMessage(cleanText, userId, channelId);
+            // Pass subscription context and slackConfig to agent for status updates
+            responseText = await this.processSlackAgentMessage(cleanText, userId, channelId, channel, effectiveSubContext, slackConfig);
         } else {
             responseText = await this.processSlackFallbackMessage(cleanText, channel, slackConfig, userId);
         }
@@ -554,6 +568,96 @@ class VMPerfBot extends ActivityHandler {
     }
 
     /**
+     * Try to extract subscription name from a command prompt and match it.
+     * Looks for patterns like "in <subscription>", "for <subscription>", "subscription <name>".
+     *
+     * @param {string} text - User's message
+     * @param {string} userId - User identifier
+     * @param {string} channel - Channel identifier
+     * @param {Object} slackConfig - Slack configuration
+     * @returns {Promise<Object|null>} Matched subscription context or null
+     */
+    async extractAndMatchSubscription(text, userId, channel, slackConfig) {
+        try {
+            // Patterns to extract subscription name from command
+            const patterns = [
+                /\bin\s+(?:subscription\s+)?["']?([^"'\n]+?)["']?\s*$/i,  // "list VMs in payerpath dev"
+                /\bfor\s+(?:subscription\s+)?["']?([^"'\n]+?)["']?\s*$/i,  // "show VMs for payerpath dev"
+                /\bsubscription\s+["']?([^"'\n]+?)["']?\s*$/i,             // "subscription payerpath dev"
+                /\bin\s+["']?([^"'\n]+?)["']?(?:\s+subscription)?$/i,      // "VMs in payerpath dev subscription"
+            ];
+
+            let extractedName = null;
+            for (const pattern of patterns) {
+                const match = text.match(pattern);
+                if (match && match[1]) {
+                    extractedName = match[1].trim();
+                    break;
+                }
+            }
+
+            if (!extractedName) {
+                console.log('[Slack] Could not extract subscription name from prompt');
+                return null;
+            }
+
+            console.log(`[Slack] Extracted subscription name from prompt: "${extractedName}"`);
+
+            // Search for matching subscriptions
+            const matches = await this.orchestrationClient.searchSubscriptions(extractedName);
+
+            if (!matches || matches.length === 0) {
+                console.log(`[Slack] No subscriptions found matching "${extractedName}"`);
+                // Send a helpful message about the subscription not being found
+                await this.sendSlackMessage(channel,
+                    `:mag: I couldn't find a subscription matching "*${extractedName}*"\n\n` +
+                    'Did you mean one of these? Type "hello" to see all subscriptions, or try a different name.',
+                    slackConfig);
+                return null;
+            }
+
+            // If exactly one match, set the context
+            if (matches.length === 1) {
+                const sub = matches[0];
+                const contextKey = `${userId}_${channel}`;
+                this.subscriptionContext.set(contextKey, {
+                    subscriptionId: sub.subscriptionId,
+                    subscriptionName: sub.name,
+                    tenantName: sub.tenantName,
+                    tenantId: sub.tenantId
+                });
+
+                // Send confirmation and indicate we're proceeding
+                await this.sendSlackMessage(channel,
+                    `:dart: _Context set: ${sub.name} (${sub.tenantName})_`,
+                    slackConfig);
+
+                return this.getSubscriptionContext(userId, channel);
+            }
+
+            // Multiple matches - ask user to pick
+            let pickText = `:mag: Found ${matches.length} subscriptions matching "*${extractedName}*":\n\n`;
+            const displayMatches = matches.slice(0, 5);
+            displayMatches.forEach((sub, index) => {
+                pickText += `${index + 1}. *${sub.name}* _(${sub.tenantName})_\n`;
+            });
+
+            if (matches.length > 5) {
+                pickText += `\n_... and ${matches.length - 5} more_\n`;
+            }
+
+            pickText += '\n:point_right: Which one did you mean? Type the full subscription name.';
+
+            await this.sendSlackMessage(channel, pickText, slackConfig);
+            return null;
+
+        } catch (error) {
+            console.error('Error extracting/matching subscription:', error);
+            return null;
+        }
+    }
+
+    /**
      * Get current subscription context for a user/channel.
      *
      * @param {string} userId - User identifier
@@ -578,8 +682,14 @@ class VMPerfBot extends ActivityHandler {
 
     /**
      * Process message through agent for Slack.
+     * @param {string} text - User message
+     * @param {string} userId - User ID
+     * @param {string} channelId - Internal channel ID (e.g., 'slack')
+     * @param {string} slackChannel - Actual Slack channel ID
+     * @param {Object} subContext - Subscription context (subscriptionId, subscriptionName, tenantName)
+     * @param {Object} slackConfig - Slack configuration (for status callbacks)
      */
-    async processSlackAgentMessage(text, userId, channelId) {
+    async processSlackAgentMessage(text, userId, channelId, slackChannel = null, subContext = null, slackConfig = null) {
         try {
             await this.initializeAgent();
 
@@ -590,11 +700,32 @@ class VMPerfBot extends ActivityHandler {
             // Get existing thread ID for multi-turn conversation
             const threadId = await this.conversationState.getThreadId(userId, channelId);
 
-            // Process through agent
-            const result = await this.agentService.processMessage(threadId, text, {
+            // Build context with subscription information
+            const context = {
                 channel: channelId,
                 userId
-            });
+            };
+
+            // Add subscription context if available
+            if (subContext) {
+                context.subscriptionId = subContext.subscriptionId;
+                context.subscriptionName = subContext.subscriptionName;
+                context.tenantName = subContext.tenantName;
+                context.tenantId = subContext.tenantId;
+                console.log(`[Agent] Using subscription context: ${subContext.subscriptionName} (${subContext.subscriptionId})`);
+            }
+
+            // Create status callback for real-time updates to Slack
+            // This shows users what the agent is doing (e.g., "Querying inventory...")
+            let statusCallback = null;
+            if (slackChannel && slackConfig) {
+                statusCallback = async (statusMessage) => {
+                    await this.sendSlackMessage(slackChannel, statusMessage, slackConfig);
+                };
+            }
+
+            // Process through agent with status callback for verbosity
+            const result = await this.agentService.processMessage(threadId, text, context, statusCallback);
 
             // Save thread ID for future messages
             if (result.threadId && result.threadId !== threadId) {
@@ -1176,6 +1307,10 @@ class VMPerfBot extends ActivityHandler {
                     }
                     break;
 
+                case 'export_csv':
+                    await this.handleExportCsv(action.value, user, channel, response_url, slackConfig);
+                    break;
+
                 default:
                     console.log(`Unhandled action: ${action.action_id}`);
             }
@@ -1286,6 +1421,135 @@ class VMPerfBot extends ActivityHandler {
             `• CPU: ${vm.CPU_Avg?.toFixed(1) || 'N/A'}% avg, ${vm.CPU_Max?.toFixed(1) || 'N/A'}% max\n` +
             `• Memory: ${vm.Memory_Avg?.toFixed(1) || 'N/A'}% avg, ${vm.Memory_Max?.toFixed(1) || 'N/A'}% max\n\n` +
             `*Recommendation:* ${vm.analysis?.recommendation || 'No specific recommendation'}`;
+    }
+
+    /**
+     * Handle CSV export request from Slack button click.
+     *
+     * @param {string} exportType - Type of export ('all', 'inventory', 'underutilized', 'overutilized', 'optimal')
+     * @param {Object} user - Slack user object
+     * @param {Object} channel - Slack channel object
+     * @param {string} responseUrl - Slack response URL
+     * @param {Object} slackConfig - Slack configuration
+     */
+    async handleExportCsv(exportType, user, channel, responseUrl, slackConfig) {
+        try {
+            const { SlackNotifier } = require('../services/slackNotifier');
+            const notifier = new SlackNotifier();
+
+            // Get user email from Slack profile
+            const userEmail = await this.getUserEmail(user?.id);
+
+            if (!userEmail) {
+                await notifier.sendResponse(responseUrl, {
+                    text: ':warning: Unable to determine your email address. Please ensure your Slack profile has an email set.'
+                });
+                return;
+            }
+
+            // Send acknowledgment
+            await notifier.sendResponse(responseUrl, {
+                text: `:hourglass_flowing_sand: Preparing *${exportType}* export and sending to ${userEmail}...`
+            });
+
+            // Fetch data based on export type
+            let data;
+            let exportName;
+            switch (exportType) {
+                case 'all':
+                case 'inventory':
+                    data = await this.orchestrationClient.getInventory({});
+                    exportName = 'VM Inventory';
+                    break;
+                case 'underutilized':
+                    data = await this.orchestrationClient.getVMsByStatus('UNDERUTILIZED');
+                    exportName = 'Underutilized VMs';
+                    break;
+                case 'overutilized':
+                    data = await this.orchestrationClient.getVMsByStatus('OVERUTILIZED');
+                    exportName = 'Overutilized VMs';
+                    break;
+                case 'optimal':
+                    data = await this.orchestrationClient.getVMsByStatus('OPTIMAL');
+                    exportName = 'Optimal VMs';
+                    break;
+                default:
+                    data = await this.orchestrationClient.getInventory({});
+                    exportName = 'VM Data';
+            }
+
+            if (!data || data.length === 0) {
+                await notifier.sendResponse(responseUrl, {
+                    text: `:information_source: No data found for *${exportName}*.`
+                });
+                return;
+            }
+
+            // Send via email endpoint
+            const result = await this.orchestrationClient.sendResultsEmail({
+                results: { results: data, rowCount: data.length, columns: Object.keys(data[0] || {}) },
+                queryType: 'csv-export',
+                userEmail,
+                userName: user?.name || user?.id || 'User',
+                synthesis: `Export of ${exportName} containing ${data.length} VMs.`
+            });
+
+            if (result.success) {
+                await notifier.sendResponse(responseUrl, {
+                    text: `:white_check_mark: *${exportName}* export (${data.length} VMs) sent to ${userEmail}!`
+                });
+            } else {
+                throw new Error(result.message || 'Email send failed');
+            }
+
+        } catch (error) {
+            console.error('Export error:', error);
+            try {
+                const { SlackNotifier } = require('../services/slackNotifier');
+                const notifier = new SlackNotifier();
+                await notifier.sendResponse(responseUrl, {
+                    text: `:x: Export failed: ${error.message}`
+                });
+            } catch (notifyError) {
+                console.error('Failed to send error notification:', notifyError);
+            }
+        }
+    }
+
+    /**
+     * Get user email from Slack profile.
+     *
+     * @param {string} userId - Slack user ID
+     * @returns {Promise<string|null>} User email or null
+     */
+    async getUserEmail(userId) {
+        if (!userId) return null;
+
+        try {
+            const axios = require('axios');
+            const { getSecret } = require('../services/keyVaultService');
+            const botToken = await getSecret('Slack-BotToken');
+
+            if (!botToken) {
+                console.error('Slack Bot Token not available');
+                return null;
+            }
+
+            const response = await axios.get('https://slack.com/api/users.info', {
+                params: { user: userId },
+                headers: { 'Authorization': `Bearer ${botToken}` }
+            });
+
+            if (response.data?.ok && response.data?.user?.profile?.email) {
+                return response.data.user.profile.email;
+            }
+
+            console.warn(`No email found for Slack user ${userId}`);
+            return null;
+        } catch (error) {
+            console.error('Failed to get user email from Slack:', error.message);
+            return null;
+        }
     }
 
     /**
