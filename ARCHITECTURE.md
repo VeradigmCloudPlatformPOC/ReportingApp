@@ -159,10 +159,11 @@ The dynamic query system includes multiple security layers:
 │         │                                                       │
 │         ▼                                                       │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │ 1. Table Whitelist Check                                │    │
-│  │    Allowed: Perf, Heartbeat, AzureDiagnostics,          │    │
-│  │    InsightsMetrics, VMProcess, VMConnection, Event,     │    │
-│  │    Syslog, AzureMetrics                                 │    │
+│  │ 1. Table Whitelist Check (v10)                          │    │
+│  │    Allowed: Perf (PRIMARY for all metrics),             │    │
+│  │    Heartbeat, Event, Syslog, VMProcess,                 │    │
+│  │    VMConnection, VMBoundPort                            │    │
+│  │    ❌ BLOCK: InsightsMetrics, AzureMetrics              │    │
 │  │    ❌ BLOCK if table not in whitelist                   │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │         │                                                       │
@@ -248,11 +249,18 @@ Results are automatically delivered via the appropriate channel:
 
 ### Component Versions
 
-| Component | Current Version | Description |
-|-----------|-----------------|-------------|
-| vmperf-orchestrator | 2.0.0 | Backend API and query execution |
-| vmperf-slack-bot | 2.0.0 | Slack integration and command handling |
-| Dynamic Query System | v9 | AI-generated KQL and Resource Graph queries |
+| Component | Image Tag | Description |
+|-----------|-----------|-------------|
+| vmperf-orchestrator | v10-fixes | Backend API and query execution (2.0 CPU / 4.0 Gi) |
+| vmperf-slack-bot | v10-fix3 | Slack integration, AI agent, tool handlers (1.0 CPU / 2.0 Gi) |
+| Dynamic Query System | v10 | AI-generated KQL/RG queries with Perf table enforcement |
+
+### v10 Changes (2026-02-03)
+- **Perf table enforcement**: Performance metrics (CPU, Memory, Disk) must use Perf table only
+- **AI parameter compatibility**: Fixed `max_completion_tokens` and removed `temperature` parameter
+- **Agent verbosity**: Real-time Slack status updates during tool execution
+- **Export functionality**: CSV export via email with user profile lookup
+- **VM name matching**: Case-insensitive, FQDN-aware matching in KQL queries
 
 ---
 

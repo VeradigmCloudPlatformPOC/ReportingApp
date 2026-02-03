@@ -285,8 +285,8 @@ async function generateKqlQuery(aiClient, userRequest, context = {}) {
             { role: 'system', content: KQL_GENERATION_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt }
         ],
-        max_completion_tokens: 1000,
-        temperature: 0.3 // Lower temperature for more consistent query generation
+        max_completion_tokens: 1000
+        // Note: temperature parameter removed - newer Azure OpenAI models only support default (1)
     });
 
     return response.choices[0]?.message?.content?.trim() || 'ERROR: No query generated';
@@ -309,8 +309,8 @@ async function generateResourceGraphQuery(aiClient, userRequest, context = {}) {
             { role: 'system', content: RESOURCE_GRAPH_GENERATION_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt }
         ],
-        max_completion_tokens: 1000,
-        temperature: 0.3
+        max_completion_tokens: 1000
+        // Note: temperature parameter removed - newer Azure OpenAI models only support default (1)
     });
 
     return response.choices[0]?.message?.content?.trim() || 'ERROR: No query generated';
@@ -340,8 +340,8 @@ async function synthesizeResults(aiClient, originalRequest, queryType, results, 
             { role: 'system', content: RESULT_SYNTHESIS_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt }
         ],
-        max_completion_tokens: 1500,
-        temperature: 0.5
+        max_completion_tokens: 1500
+        // Note: temperature parameter removed - newer Azure OpenAI models only support default (1)
     });
 
     return response.choices[0]?.message?.content?.trim() || formatFallbackSynthesis(results);
