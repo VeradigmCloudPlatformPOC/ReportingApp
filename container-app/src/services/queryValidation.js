@@ -19,18 +19,20 @@
 /**
  * Allowed KQL tables for performance monitoring queries.
  * Only these tables can be queried through the dynamic query endpoint.
+ *
+ * IMPORTANT: Performance metrics (CPU, Memory, Disk) MUST come from the Perf table only.
+ * Other tables are allowed for supplementary data (availability, diagnostics, etc.)
  */
 const ALLOWED_KQL_TABLES = [
-    'Perf',
-    'Heartbeat',
-    'AzureDiagnostics',
-    'InsightsMetrics',
-    'VMProcess',
-    'VMConnection',
-    'VMBoundPort',
-    'Event',
-    'Syslog',
-    'AzureMetrics'
+    'Perf',           // PRIMARY: All performance metrics (CPU, Memory, Disk IOPS, etc.)
+    'Heartbeat',      // VM availability and connectivity (not performance metrics)
+    'Event',          // Windows event logs (not performance metrics)
+    'Syslog',         // Linux system logs (not performance metrics)
+    'VMProcess',      // Process-level data from VM Insights
+    'VMConnection',   // Network connection data from VM Insights
+    'VMBoundPort'     // Port binding data from VM Insights
+    // NOTE: InsightsMetrics and AzureMetrics are intentionally excluded
+    // Performance metrics must come from the Perf table for consistency
 ];
 
 /**
