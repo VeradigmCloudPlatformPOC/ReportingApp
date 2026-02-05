@@ -101,6 +101,10 @@ async function sendSlackProgress(channel, message, slackToken) {
 const PORT = process.env.PORT || 8080;
 const KEY_VAULT_NAME = process.env.KEY_VAULT_NAME || 'vmperf-kv-18406';
 const KEY_VAULT_URL = `https://${KEY_VAULT_NAME}.vault.azure.net`;
+// Storage account name for managed identity authentication
+const AZURE_STORAGE_ACCOUNT_NAME = process.env.AZURE_STORAGE_ACCOUNT_NAME || 'vmperfstore18406';
+// Use managed identity for storage (set to 'true' to enable)
+const USE_MANAGED_IDENTITY_STORAGE = process.env.USE_MANAGED_IDENTITY_STORAGE === 'true';
 
 // Secrets cache - loaded once at first request, reused for subsequent calls
 let secretsCache = null;
@@ -108,7 +112,8 @@ let storageInitialized = false;
 
 /**
  * Ensure storage is initialized.
- * Must be called before any endpoint that uses storage services.
+ * Uses managed identity (DefaultAzureCredential) by default in production.
+ * Falls back to connection string for local development.
  *
  * @returns {Promise<boolean>} True if storage is available
  */
@@ -116,6 +121,15 @@ async function ensureStorageInitialized() {
     if (storageInitialized) return true;
 
     try {
+        if (USE_MANAGED_IDENTITY_STORAGE) {
+            // Use managed identity with storage account name
+            console.log(`Initializing storage with managed identity for account: ${AZURE_STORAGE_ACCOUNT_NAME}`);
+            await initializeStorage(AZURE_STORAGE_ACCOUNT_NAME);
+            storageInitialized = true;
+            return true;
+        }
+
+        // Legacy: Use connection string from Key Vault
         const secrets = await loadSecrets();
         if (secrets.StorageConnectionString) {
             await initializeStorage(secrets.StorageConnectionString);

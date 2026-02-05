@@ -2,6 +2,9 @@
  * @fileoverview Metrics API Routes
  *
  * Endpoints for collecting and querying VM performance metrics.
+ * v12: Added queue-based reliable collection endpoints.
+ *
+ * @version v12
  */
 
 const express = require('express');
@@ -9,8 +12,15 @@ const router = express.Router();
 const {
     collectMetrics,
     getVMMetrics,
-    metricsMapToArray
+    metricsMapToArray,
+    // v12: Queue-based processing
+    collectMetricsReliable,
+    getReliableJobStatus,
+    getReliableJobResults
 } = require('../services/metricsCollector');
+const batchQueueService = require('../services/batchQueueService');
+const batchStorageService = require('../services/batchStorageService');
+const { getJobProcessor } = require('../jobs/jobProcessor');
 
 /**
  * POST /api/metrics/collect
@@ -201,6 +211,251 @@ router.get('/vm/:vmName', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'QUERY_FAILED',
+            message: error.message
+        });
+    }
+});
+
+// ============================================================================
+// v12: Queue-Based Reliable Collection Endpoints
+// ============================================================================
+
+/**
+ * POST /api/metrics/collect/reliable
+ *
+ * Start a reliable metrics collection job using Azure Storage Queue.
+ * Returns immediately with a jobId for tracking.
+ */
+router.post('/collect/reliable', async (req, res) => {
+    const {
+        subscriptionId,
+        tenantId,
+        timeRangeDays = 30
+    } = req.body;
+
+    if (!subscriptionId) {
+        return res.status(400).json({
+            success: false,
+            error: 'MISSING_SUBSCRIPTION',
+            message: 'subscriptionId is required'
+        });
+    }
+
+    console.log(`[MetricsRoutes] Starting reliable collection for subscription ${subscriptionId}`);
+
+    try {
+        const secrets = req.secrets;
+
+        const result = await collectMetricsReliable({
+            subscriptionId,
+            tenantId,
+            timeRangeDays,
+            workspaceId: secrets.logAnalytics?.workspaceId,
+            resourceGraphServiceUrl: secrets.resourceGraphServiceUrl
+        });
+
+        if (!result.success) {
+            return res.status(500).json({
+                success: false,
+                error: 'JOB_CREATION_FAILED',
+                message: result.error
+            });
+        }
+
+        res.json(result);
+
+    } catch (error) {
+        console.error('[MetricsRoutes] Reliable collection error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'INTERNAL_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/metrics/job/:jobId
+ *
+ * Get the status of a reliable collection job.
+ */
+router.get('/job/:jobId', async (req, res) => {
+    const { jobId } = req.params;
+
+    if (!jobId) {
+        return res.status(400).json({
+            success: false,
+            error: 'MISSING_JOB_ID',
+            message: 'jobId is required'
+        });
+    }
+
+    try {
+        const status = await getReliableJobStatus(jobId);
+        res.json(status);
+
+    } catch (error) {
+        console.error('[MetricsRoutes] Job status error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'STATUS_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/metrics/job/:jobId/results
+ *
+ * Get the results of a completed reliable collection job.
+ */
+router.get('/job/:jobId/results', async (req, res) => {
+    const { jobId } = req.params;
+
+    if (!jobId) {
+        return res.status(400).json({
+            success: false,
+            error: 'MISSING_JOB_ID',
+            message: 'jobId is required'
+        });
+    }
+
+    try {
+        const results = await getReliableJobResults(jobId);
+
+        if (!results.success) {
+            return res.status(results.error === 'Job not found' ? 404 : 400).json(results);
+        }
+
+        // Convert Map to array for JSON serialization
+        if (results.metrics instanceof Map) {
+            results.metrics = metricsMapToArray(results.metrics);
+        }
+
+        res.json(results);
+
+    } catch (error) {
+        console.error('[MetricsRoutes] Job results error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'RESULTS_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * DELETE /api/metrics/job/:jobId
+ *
+ * Clean up a completed job's data.
+ */
+router.delete('/job/:jobId', async (req, res) => {
+    const { jobId } = req.params;
+
+    if (!jobId) {
+        return res.status(400).json({
+            success: false,
+            error: 'MISSING_JOB_ID',
+            message: 'jobId is required'
+        });
+    }
+
+    try {
+        const deletedCount = await batchStorageService.cleanupJobBlobs(jobId);
+
+        res.json({
+            success: true,
+            jobId,
+            deletedBlobs: deletedCount
+        });
+
+    } catch (error) {
+        console.error('[MetricsRoutes] Job cleanup error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'CLEANUP_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/metrics/queue/stats
+ *
+ * Get queue and storage statistics.
+ */
+router.get('/queue/stats', async (req, res) => {
+    try {
+        const [queueStats, storageStats] = await Promise.all([
+            batchQueueService.getQueueStats(),
+            batchStorageService.getStorageStats()
+        ]);
+
+        const processor = getJobProcessor();
+        const processorStatus = await processor.getStatus();
+
+        res.json({
+            success: true,
+            queue: queueStats,
+            storage: storageStats,
+            processor: processorStatus
+        });
+
+    } catch (error) {
+        console.error('[MetricsRoutes] Stats error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'STATS_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/metrics/queue/deadletter
+ *
+ * Get batches in the dead-letter queue.
+ */
+router.get('/queue/deadletter', async (req, res) => {
+    try {
+        const deadLettered = await batchQueueService.getDeadLetteredBatches(20);
+
+        res.json({
+            success: true,
+            count: deadLettered.length,
+            batches: deadLettered
+        });
+
+    } catch (error) {
+        console.error('[MetricsRoutes] Dead-letter error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'DEADLETTER_ERROR',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/metrics/queue/cleanup
+ *
+ * Run cleanup for expired blobs.
+ */
+router.post('/queue/cleanup', async (req, res) => {
+    try {
+        const processor = getJobProcessor();
+        const deletedCount = await processor.runCleanup();
+
+        res.json({
+            success: true,
+            deletedBlobs: deletedCount
+        });
+
+    } catch (error) {
+        console.error('[MetricsRoutes] Cleanup error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'CLEANUP_ERROR',
             message: error.message
         });
     }

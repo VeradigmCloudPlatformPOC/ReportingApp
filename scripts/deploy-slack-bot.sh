@@ -29,7 +29,7 @@ CONTAINER_APP_ENV_NAME="vmperf-env"
 CONTAINER_APP_NAME="vmperf-slack-bot"
 ACR_NAME="ca0bf4270c7eacr"
 IMAGE_NAME="vmperf-slack-bot"
-IMAGE_TAG="v11-microservices"
+IMAGE_TAG="v12"
 
 echo "=============================================="
 echo "VM Performance Slack Bot - Deployment"

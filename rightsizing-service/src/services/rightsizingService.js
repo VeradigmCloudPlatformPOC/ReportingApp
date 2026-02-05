@@ -7,6 +7,50 @@
 const { THRESHOLDS, SIZE_DOWNGRADES, SIZE_UPGRADES, ESTIMATED_MONTHLY_COSTS } = require('../data/vmSizeMappings');
 
 /**
+ * Find metrics for a VM by name with flexible matching.
+ * Handles FQDN vs short name matching.
+ *
+ * @param {string} vmName - VM name from inventory (usually short name)
+ * @param {Map} metricsMap - Metrics map with various name formats
+ * @returns {Object|null} Matching metrics or null
+ */
+function findMetricsForVM(vmName, metricsMap) {
+    if (!vmName) return null;
+
+    const vmNameLower = vmName.toLowerCase();
+
+    // 1. Try exact match (case-insensitive)
+    if (metricsMap.has(vmNameLower)) {
+        return metricsMap.get(vmNameLower);
+    }
+
+    // 2. Search through all metrics keys for partial matches
+    for (const [key, metrics] of metricsMap) {
+        const keyLower = key.toLowerCase();
+
+        // Check if the metrics key starts with the VM name (FQDN format)
+        // e.g., "vmname.domain.local" starts with "vmname"
+        if (keyLower.startsWith(vmNameLower + '.')) {
+            return metrics;
+        }
+
+        // Check if the VM name starts with the metrics key's short name
+        // e.g., inventory "VMName" matches metrics "vmname.domain.local" (extract "vmname")
+        const shortKey = keyLower.split('.')[0];
+        if (vmNameLower === shortKey) {
+            return metrics;
+        }
+
+        // Check if the short name from metrics matches the VM name (case-insensitive)
+        if (shortKey === vmNameLower) {
+            return metrics;
+        }
+    }
+
+    return null;
+}
+
+/**
  * Analyze right-sizing for VMs.
  *
  * @param {Object[]} inventory - VM inventory from Resource Graph
@@ -22,11 +66,11 @@ function analyzeRightSizing(inventory, metricsMap, options = {}) {
     const rightSized = [];
     const insufficientData = [];
     let totalSavings = 0;
+    let totalAdditionalCost = 0;
 
     for (const vm of inventory) {
         const vmName = vm.vmName || vm.name;
-        const metrics = metricsMap.get(vmName?.toLowerCase()) ||
-                       metricsMap.get(vmName);
+        const metrics = findMetricsForVM(vmName, metricsMap);
 
         if (!metrics) {
             insufficientData.push({
@@ -50,6 +94,7 @@ function analyzeRightSizing(inventory, metricsMap, options = {}) {
                 break;
             case 'OVERUTILIZED':
                 overutilized.push(analysis);
+                totalAdditionalCost += analysis.estimatedAdditionalCost || 0;
                 break;
             case 'INSUFFICIENT_DATA':
                 insufficientData.push(analysis);
@@ -89,6 +134,9 @@ function analyzeRightSizing(inventory, metricsMap, options = {}) {
         }))
     ];
 
+    // Calculate net impact: savings from downsizing minus cost of upsizing
+    const netMonthlySavings = totalSavings - totalAdditionalCost;
+
     return {
         analyzedAt: new Date().toISOString(),
         timeRangeDays,
@@ -99,7 +147,9 @@ function analyzeRightSizing(inventory, metricsMap, options = {}) {
             overutilized: overutilized.length,
             rightSized: rightSized.length,
             insufficientData: insufficientData.length,
-            estimatedMonthlySavings: Math.round(totalSavings)
+            estimatedMonthlySavings: Math.round(totalSavings),
+            estimatedAdditionalCost: Math.round(totalAdditionalCost),
+            netMonthlyImpact: Math.round(netMonthlySavings)
         },
         recommendations,
         details: {
@@ -195,6 +245,13 @@ function analyzeVMMetrics(metrics, vmInfo) {
             reasons.push(`Memory P95 ${metrics.Memory_P95}%, max ${metrics.Memory_Max}%`);
         }
         result.reason = reasons.join('; ');
+
+        // Calculate additional cost for upsizing
+        if (result.recommendedSize) {
+            const currentCost = ESTIMATED_MONTHLY_COSTS[vmSize] || 0;
+            const newCost = ESTIMATED_MONTHLY_COSTS[result.recommendedSize] || 0;
+            result.estimatedAdditionalCost = Math.max(0, newCost - currentCost);
+        }
         return result;
     }
 

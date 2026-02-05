@@ -11,12 +11,13 @@
  * - Blob Container 'analysis-results': {runId}/results.json
  * - Blob Container 'inventory': {tenantId}/inventory.json
  *
- * @version v7-slack-bot
+ * @version v12-managed-identity
  * @author VM Performance Monitoring Team
  */
 
 const { TableClient, TableServiceClient } = require('@azure/data-tables');
 const { BlobServiceClient, BlobSASPermissions, generateBlobSASQueryParameters, StorageSharedKeyCredential } = require('@azure/storage-blob');
+const { DefaultAzureCredential } = require('@azure/identity');
 const zlib = require('zlib');
 const { promisify } = require('util');
 
@@ -33,34 +34,63 @@ let inventoryBlobContainer = null;
 let reportsBlobContainer = null;
 let storageAccountName = null;
 let storageAccountKey = null;
+let credential = null;
 
 /**
- * Initialize storage clients with connection string.
+ * Initialize storage clients with managed identity (DefaultAzureCredential).
+ * Falls back to connection string if provided for local development.
  *
- * @param {string} connectionString - Azure Storage connection string
+ * @param {string} connectionStringOrAccountName - Azure Storage account name (for managed identity) or connection string (fallback)
  */
-async function initializeStorage(connectionString) {
+async function initializeStorage(connectionStringOrAccountName) {
     if (tableServiceClient && blobServiceClient) {
         return; // Already initialized
     }
 
     console.log('Initializing Azure Storage clients...');
 
-    // Extract account name and key from connection string for SAS generation
-    const accountNameMatch = connectionString.match(/AccountName=([^;]+)/);
-    const accountKeyMatch = connectionString.match(/AccountKey=([^;]+)/);
-    if (accountNameMatch && accountKeyMatch) {
-        storageAccountName = accountNameMatch[1];
-        storageAccountKey = accountKeyMatch[1];
+    // Check if it's a connection string or account name
+    const isConnectionString = connectionStringOrAccountName && connectionStringOrAccountName.includes('AccountKey=');
+
+    if (isConnectionString) {
+        // Legacy: Use connection string (for local development)
+        console.log('Using connection string authentication (legacy mode)');
+
+        // Extract account name and key from connection string for SAS generation
+        const accountNameMatch = connectionStringOrAccountName.match(/AccountName=([^;]+)/);
+        const accountKeyMatch = connectionStringOrAccountName.match(/AccountKey=([^;]+)/);
+        if (accountNameMatch && accountKeyMatch) {
+            storageAccountName = accountNameMatch[1];
+            storageAccountKey = accountKeyMatch[1];
+        }
+
+        // Initialize Table Storage
+        tableServiceClient = TableServiceClient.fromConnectionString(connectionStringOrAccountName);
+        runsTableClient = TableClient.fromConnectionString(connectionStringOrAccountName, 'runs');
+        tenantsTableClient = TableClient.fromConnectionString(connectionStringOrAccountName, 'tenants');
+
+        // Initialize Blob Storage
+        blobServiceClient = BlobServiceClient.fromConnectionString(connectionStringOrAccountName);
+    } else {
+        // Use managed identity (DefaultAzureCredential)
+        storageAccountName = connectionStringOrAccountName || process.env.AZURE_STORAGE_ACCOUNT_NAME || 'vmperfstore18406';
+        console.log(`Using managed identity authentication for storage account: ${storageAccountName}`);
+
+        credential = new DefaultAzureCredential();
+
+        const tableEndpoint = `https://${storageAccountName}.table.core.windows.net`;
+        const blobEndpoint = `https://${storageAccountName}.blob.core.windows.net`;
+
+        // Initialize Table Storage with managed identity
+        tableServiceClient = new TableServiceClient(tableEndpoint, credential);
+        runsTableClient = new TableClient(tableEndpoint, 'runs', credential);
+        tenantsTableClient = new TableClient(tableEndpoint, 'tenants', credential);
+
+        // Initialize Blob Storage with managed identity
+        blobServiceClient = new BlobServiceClient(blobEndpoint, credential);
     }
 
-    // Initialize Table Storage
-    tableServiceClient = TableServiceClient.fromConnectionString(connectionString);
-    runsTableClient = TableClient.fromConnectionString(connectionString, 'runs');
-    tenantsTableClient = TableClient.fromConnectionString(connectionString, 'tenants');
-
-    // Initialize Blob Storage
-    blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+    // Initialize blob containers
     analysisBlobContainer = blobServiceClient.getContainerClient('analysis-results');
     inventoryBlobContainer = blobServiceClient.getContainerClient('inventory');
     reportsBlobContainer = blobServiceClient.getContainerClient('reports');
@@ -590,6 +620,7 @@ async function saveReportToBlob(runId, reportType, htmlContent, metadata = {}) {
 
 /**
  * Generate a SAS URL for downloading a report.
+ * Uses User Delegation SAS with managed identity, or falls back to shared key.
  *
  * @param {string} runId - Run identifier
  * @param {string} reportType - Type of report ('technical' or 'executive')
@@ -626,27 +657,55 @@ async function generateReportSasUrl(runId, reportType, expiryHours = 1) {
         }
     }
 
-    // Generate SAS token using manual approach with explicit version
+    // Generate SAS token
     const expiresOn = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
     const startsOn = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago (clock skew)
 
-    // Create shared key credential for SAS signing
-    const sharedKeyCredential = new StorageSharedKeyCredential(storageAccountName, storageAccountKey);
+    let sasUrl;
 
-    // Generate SAS query parameters with explicit version
-    const sasQueryParams = generateBlobSASQueryParameters({
-        containerName: 'reports',
-        blobName: blobName,
-        permissions: BlobSASPermissions.parse('r'), // Read only
-        startsOn: startsOn,
-        expiresOn: expiresOn,
-        contentType: 'text/html',
-        contentDisposition: `attachment; filename="${reportType}-report-${runId}.html"`,
-        version: '2022-11-02' // Use stable API version
-    }, sharedKeyCredential);
+    if (storageAccountKey) {
+        // Use shared key credential for SAS signing (legacy/local dev)
+        const sharedKeyCredential = new StorageSharedKeyCredential(storageAccountName, storageAccountKey);
 
-    // Build full SAS URL
-    const sasUrl = `${blobClient.url}?${sasQueryParams.toString()}`;
+        const sasQueryParams = generateBlobSASQueryParameters({
+            containerName: 'reports',
+            blobName: blobName,
+            permissions: BlobSASPermissions.parse('r'),
+            startsOn: startsOn,
+            expiresOn: expiresOn,
+            contentType: 'text/html',
+            contentDisposition: `attachment; filename="${reportType}-report-${runId}.html"`,
+            version: '2022-11-02'
+        }, sharedKeyCredential);
+
+        sasUrl = `${blobClient.url}?${sasQueryParams.toString()}`;
+    } else if (credential) {
+        // Use User Delegation SAS with managed identity
+        const { generateBlobSASQueryParameters: genSas, BlobSASPermissions: SASPerms } = require('@azure/storage-blob');
+
+        // Get user delegation key (valid for up to 7 days)
+        const userDelegationKey = await blobServiceClient.getUserDelegationKey(startsOn, expiresOn);
+
+        const sasQueryParams = genSas({
+            containerName: 'reports',
+            blobName: blobName,
+            permissions: SASPerms.parse('r'),
+            startsOn: startsOn,
+            expiresOn: expiresOn,
+            contentType: 'text/html',
+            contentDisposition: `attachment; filename="${reportType}-report-${runId}.html"`,
+            version: '2022-11-02'
+        }, userDelegationKey, storageAccountName);
+
+        sasUrl = `${blobClient.url}?${sasQueryParams.toString()}`;
+    } else {
+        return {
+            success: false,
+            error: 'No credential available for SAS generation',
+            url: null,
+            expiresAt: null
+        };
+    }
 
     return {
         success: true,
@@ -704,6 +763,7 @@ async function saveJsonDataToBlob(runId, analysisData, metadata = {}) {
 
 /**
  * Generate a SAS URL for downloading raw JSON data.
+ * Uses User Delegation SAS with managed identity, or falls back to shared key.
  *
  * @param {string} runId - Run identifier
  * @param {number} expiryHours - Hours until SAS expires (default 1 hour)
@@ -728,20 +788,48 @@ async function generateJsonSasUrl(runId, expiryHours = 1) {
     const expiresOn = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
     const startsOn = new Date(Date.now() - 5 * 60 * 1000);
 
-    const sharedKeyCredential = new StorageSharedKeyCredential(storageAccountName, storageAccountKey);
+    let sasUrl;
 
-    const sasQueryParams = generateBlobSASQueryParameters({
-        containerName: 'reports',
-        blobName: blobName,
-        permissions: BlobSASPermissions.parse('r'),
-        startsOn: startsOn,
-        expiresOn: expiresOn,
-        contentType: 'application/json',
-        contentDisposition: `attachment; filename="vm-analysis-${runId}.json"`,
-        version: '2022-11-02'
-    }, sharedKeyCredential);
+    if (storageAccountKey) {
+        // Use shared key credential for SAS signing (legacy/local dev)
+        const sharedKeyCredential = new StorageSharedKeyCredential(storageAccountName, storageAccountKey);
 
-    const sasUrl = `${blobClient.url}?${sasQueryParams.toString()}`;
+        const sasQueryParams = generateBlobSASQueryParameters({
+            containerName: 'reports',
+            blobName: blobName,
+            permissions: BlobSASPermissions.parse('r'),
+            startsOn: startsOn,
+            expiresOn: expiresOn,
+            contentType: 'application/json',
+            contentDisposition: `attachment; filename="vm-analysis-${runId}.json"`,
+            version: '2022-11-02'
+        }, sharedKeyCredential);
+
+        sasUrl = `${blobClient.url}?${sasQueryParams.toString()}`;
+    } else if (credential) {
+        // Use User Delegation SAS with managed identity
+        const userDelegationKey = await blobServiceClient.getUserDelegationKey(startsOn, expiresOn);
+
+        const sasQueryParams = generateBlobSASQueryParameters({
+            containerName: 'reports',
+            blobName: blobName,
+            permissions: BlobSASPermissions.parse('r'),
+            startsOn: startsOn,
+            expiresOn: expiresOn,
+            contentType: 'application/json',
+            contentDisposition: `attachment; filename="vm-analysis-${runId}.json"`,
+            version: '2022-11-02'
+        }, userDelegationKey, storageAccountName);
+
+        sasUrl = `${blobClient.url}?${sasQueryParams.toString()}`;
+    } else {
+        return {
+            success: false,
+            error: 'No credential available for SAS generation',
+            url: null,
+            expiresAt: null
+        };
+    }
 
     return {
         success: true,

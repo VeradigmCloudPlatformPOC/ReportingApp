@@ -6,17 +6,23 @@
  * - Batched queries (50 VMs per batch)
  * - Concurrent execution (max 3 parallel queries)
  * - Pre-aggregation for efficiency
+ * - v12: Azure Storage Queue + Blob for reliable batch processing
  *
- * @version v11-microservices
+ * @version v12
  */
 
 const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
 const { getLogAnalyticsToken, getTenantConfig, initializeAuth } = require('../shared/multiTenantAuth');
 const {
     escapeKqlString,
     escapeVmName,
     validateTimeRange
 } = require('../shared/securityUtils');
+
+// v12: Queue and storage services for reliable batch processing
+const batchQueueService = require('./batchQueueService');
+const batchStorageService = require('./batchStorageService');
 
 // Auth initialization flag
 let authInitialized = false;
@@ -496,12 +502,309 @@ function metricsMapToArray(metricsMap) {
     return result;
 }
 
+// ============================================================================
+// v12: Queue-Based Reliable Batch Processing
+// ============================================================================
+
+/**
+ * Collect metrics using Azure Storage Queue for reliability.
+ * Results are persisted to Blob Storage for 24hr retention.
+ *
+ * @param {Object} options - Collection options
+ * @param {string} options.subscriptionId - Target subscription
+ * @param {string} options.tenantId - Tenant ID
+ * @param {number} options.timeRangeDays - Analysis period (default: 30)
+ * @param {string} options.workspaceId - Log Analytics workspace ID
+ * @param {string} options.resourceGraphServiceUrl - App 1 URL
+ * @param {Function} options.progressCallback - Optional progress callback
+ * @returns {Promise<Object>} Job info with jobId for tracking
+ */
+async function collectMetricsReliable(options) {
+    const {
+        subscriptionId,
+        tenantId,
+        timeRangeDays = 30,
+        workspaceId,
+        resourceGraphServiceUrl,
+        progressCallback
+    } = options;
+
+    const jobId = `job-${Date.now()}-${uuidv4().slice(0, 8)}`;
+
+    console.log(`[MetricsCollector] Starting reliable collection job ${jobId}`);
+
+    try {
+        // Step 1: Get VM inventory
+        const serviceUrl = resourceGraphServiceUrl || RESOURCE_GRAPH_SERVICE_URL;
+        const inventory = await getVMInventory(subscriptionId, tenantId, serviceUrl);
+
+        if (!inventory || inventory.length === 0) {
+            return {
+                success: false,
+                jobId,
+                error: 'No VMs found in subscription'
+            };
+        }
+
+        console.log(`[MetricsCollector] Found ${inventory.length} VMs for job ${jobId}`);
+
+        // Step 2: Create batches
+        const batches = [];
+        for (let i = 0; i < inventory.length; i += MAX_VMS_PER_BATCH) {
+            batches.push({
+                index: batches.length,
+                vms: inventory.slice(i, i + MAX_VMS_PER_BATCH)
+            });
+        }
+
+        // Step 3: Save initial job status with inventory
+        await batchStorageService.saveJobStatus(jobId, {
+            status: 'PENDING',
+            subscriptionId,
+            tenantId,
+            timeRangeDays,
+            workspaceId,
+            totalVMs: inventory.length,
+            totalBatches: batches.length,
+            completedBatches: 0,
+            startedAt: new Date().toISOString(),
+            inventory // Store inventory for later retrieval
+        });
+
+        // Step 4: Enqueue all batches
+        const enqueueResult = await batchQueueService.enqueueAllBatches(jobId, batches, {
+            subscriptionId,
+            tenantId,
+            timeRangeDays,
+            workspaceId
+        });
+
+        if (progressCallback) {
+            progressCallback({
+                phase: 'queued',
+                message: `Enqueued ${batches.length} batches for processing`,
+                jobId,
+                totalBatches: batches.length
+            });
+        }
+
+        console.log(`[MetricsCollector] Enqueued ${batches.length} batches for job ${jobId}`);
+
+        return {
+            success: true,
+            jobId,
+            status: 'PENDING',
+            totalVMs: inventory.length,
+            totalBatches: batches.length,
+            message: 'Job queued for processing. Use getJobStatus(jobId) to track progress.'
+        };
+
+    } catch (error) {
+        console.error(`[MetricsCollector] Failed to start job ${jobId}:`, error.message);
+
+        await batchStorageService.saveJobStatus(jobId, {
+            status: 'FAILED',
+            error: error.message,
+            failedAt: new Date().toISOString()
+        });
+
+        return {
+            success: false,
+            jobId,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Process a single batch from the queue.
+ * Called by the job processor worker.
+ *
+ * @param {Object} batchJob - Batch job from queue
+ * @returns {Promise<Object>} Processing result
+ */
+async function processBatchFromQueue(batchJob) {
+    const {
+        jobId,
+        batchIndex,
+        vmList,
+        workspaceId,
+        timeRangeDays,
+        tenantId,
+        subscriptionId,
+        messageId,
+        popReceipt,
+        dequeueCount
+    } = batchJob;
+
+    console.log(`[MetricsCollector] Processing batch ${batchIndex} for job ${jobId} (attempt ${dequeueCount})`);
+
+    try {
+        // Get tenant config and access token
+        const tenantConfig = getTenantConfig(tenantId);
+        if (!tenantConfig) {
+            throw new Error('No tenant configuration found');
+        }
+
+        const accessToken = await getLogAnalyticsToken(tenantConfig);
+
+        // Create VM objects for the batch query
+        const vms = vmList.map(name => ({ vmName: name }));
+
+        // Execute the batch query
+        const results = await executeBatchQuery(accessToken, workspaceId, vms, timeRangeDays, subscriptionId);
+
+        // Save results to blob storage
+        await batchStorageService.saveBatchResults(jobId, batchIndex, results, {
+            vmList,
+            timeRangeDays,
+            attempt: dequeueCount
+        });
+
+        // Mark batch as completed in queue
+        await batchQueueService.completeBatch(messageId, popReceipt);
+
+        // Update job status
+        const currentStatus = await batchStorageService.getJobStatus(jobId);
+        if (currentStatus) {
+            const completedBatches = (currentStatus.completedBatches || 0) + 1;
+            const allDone = completedBatches >= currentStatus.totalBatches;
+
+            await batchStorageService.saveJobStatus(jobId, {
+                ...currentStatus,
+                status: allDone ? 'COMPLETED' : 'IN_PROGRESS',
+                completedBatches,
+                lastBatchCompletedAt: new Date().toISOString(),
+                ...(allDone && { completedAt: new Date().toISOString() })
+            });
+        }
+
+        console.log(`[MetricsCollector] Batch ${batchIndex} completed for job ${jobId} (${results.length} VMs)`);
+
+        return {
+            success: true,
+            jobId,
+            batchIndex,
+            vmCount: results.length
+        };
+
+    } catch (error) {
+        console.error(`[MetricsCollector] Batch ${batchIndex} failed:`, error.message);
+
+        // Check if we should retry or dead-letter
+        if (batchQueueService.shouldRetry(batchJob)) {
+            // Exponential backoff: 5s, 10s, 20s
+            const delaySeconds = Math.min(5 * Math.pow(2, dequeueCount - 1), 60);
+            await batchQueueService.updateVisibility(messageId, popReceipt, delaySeconds);
+
+            console.log(`[MetricsCollector] Batch ${batchIndex} will retry in ${delaySeconds}s`);
+        } else {
+            // Move to dead-letter queue
+            await batchQueueService.deadLetterBatch(batchJob, error.message);
+
+            console.log(`[MetricsCollector] Batch ${batchIndex} moved to dead-letter queue`);
+        }
+
+        return {
+            success: false,
+            jobId,
+            batchIndex,
+            error: error.message,
+            willRetry: batchQueueService.shouldRetry(batchJob)
+        };
+    }
+}
+
+/**
+ * Get the status of a reliable collection job.
+ *
+ * @param {string} jobId - Job identifier
+ * @returns {Promise<Object>} Job status
+ */
+async function getReliableJobStatus(jobId) {
+    const status = await batchStorageService.getJobStatus(jobId);
+
+    if (!status) {
+        return {
+            success: false,
+            error: 'Job not found'
+        };
+    }
+
+    // Get batch completion details
+    const batches = await batchStorageService.listJobBatches(jobId);
+
+    return {
+        success: true,
+        ...status,
+        batchesCompleted: batches.length,
+        progress: status.totalBatches > 0
+            ? Math.round((batches.length / status.totalBatches) * 100)
+            : 0
+    };
+}
+
+/**
+ * Get results for a completed reliable collection job.
+ *
+ * @param {string} jobId - Job identifier
+ * @returns {Promise<Object>} Aggregated results
+ */
+async function getReliableJobResults(jobId) {
+    const status = await batchStorageService.getJobStatus(jobId);
+
+    if (!status) {
+        return {
+            success: false,
+            error: 'Job not found'
+        };
+    }
+
+    if (status.status !== 'COMPLETED') {
+        return {
+            success: false,
+            error: `Job is not completed (status: ${status.status})`,
+            status
+        };
+    }
+
+    // Aggregate all batch results
+    const aggregated = await batchStorageService.aggregateJobResults(jobId);
+
+    // Convert to metrics map format for compatibility
+    const metricsMap = new Map();
+    for (const row of aggregated.results) {
+        const vmName = row.Computer?.toLowerCase();
+        if (vmName) {
+            metricsMap.set(vmName, row);
+        }
+    }
+
+    return {
+        success: true,
+        jobId,
+        inventory: status.inventory || [],  // Include stored inventory
+        metrics: metricsMap,
+        metricsArray: aggregated.results,
+        vmCount: (status.inventory || []).length,
+        summary: aggregated.summary,
+        status
+    };
+}
+
 module.exports = {
+    // v11 - synchronous processing
     collectMetrics,
     getVMInventory,
     collectBatchedMetrics,
     getVMMetrics,
     metricsMapToArray,
     MAX_VMS_PER_BATCH,
-    MAX_CONCURRENT_QUERIES
+    MAX_CONCURRENT_QUERIES,
+
+    // v12 - reliable queue-based processing
+    collectMetricsReliable,
+    processBatchFromQueue,
+    getReliableJobStatus,
+    getReliableJobResults
 };

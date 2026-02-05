@@ -18,7 +18,7 @@ const { initializeKeyVault, loadSecrets: loadKeyVaultSecrets } = require('./shar
 const { initializeAuth } = require('./shared/multiTenantAuth');
 const metricsRoutes = require('./routes/metricsRoutes');
 const jobRoutes = require('./routes/jobRoutes');
-const { JobProcessor } = require('./jobs/jobProcessor');
+const { getJobProcessor } = require('./jobs/jobProcessor');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -51,6 +51,9 @@ async function loadSecrets() {
         workspaceId: secrets.LogAnalyticsWorkspaceId,
         clientId: secrets.LogAnalyticsClientId
     };
+
+    // Map storage connection string for job processor
+    secrets.storageConnectionString = secrets.StorageAccountConnectionString;
 
     console.log('[Startup] Secrets loaded successfully');
     return secrets;
@@ -125,7 +128,7 @@ async function start() {
 
         // Initialize job processor (optional - can run in background)
         if (secrets.storageConnectionString) {
-            jobProcessor = new JobProcessor(secrets);
+            jobProcessor = getJobProcessor();
             // Start processing jobs in background
             jobProcessor.start().catch(err => {
                 console.error('Job processor error:', err);

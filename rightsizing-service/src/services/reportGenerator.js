@@ -222,30 +222,30 @@ function generateHTMLReport(analysisResults, options = {}) {
         ` : ''}
 
         <h2>📊 Summary Overview</h2>
-        <div class="summary-grid">
-            <div class="summary-card">
-                <h3>Total VMs</h3>
-                <div class="value">${summary.totalVMs}</div>
-            </div>
-            <div class="summary-card underutilized">
-                <h3>Underutilized</h3>
-                <div class="value">${summary.underutilized}</div>
-            </div>
-            <div class="summary-card overutilized">
-                <h3>Overutilized</h3>
-                <div class="value">${summary.overutilized}</div>
-            </div>
-            <div class="summary-card rightsized">
-                <h3>Right-sized</h3>
-                <div class="value">${summary.rightSized}</div>
-            </div>
-            ${summary.estimatedMonthlySavings > 0 ? `
-            <div class="summary-card savings">
-                <h3>Est. Monthly Savings</h3>
-                <div class="value">$${summary.estimatedMonthlySavings.toLocaleString()}</div>
-            </div>
-            ` : ''}
-        </div>
+        <table style="width: 100%; border-collapse: separate; border-spacing: 10px; margin: 20px 0;">
+            <tr>
+                <td style="background-color: #667eea; color: white; padding: 20px; border-radius: 8px; text-align: center; width: 20%;">
+                    <div style="font-size: 12px; text-transform: uppercase; margin-bottom: 5px;">Total VMs</div>
+                    <div style="font-size: 32px; font-weight: bold;">${summary?.totalVMs || 0}</div>
+                </td>
+                <td style="background-color: #f5576c; color: white; padding: 20px; border-radius: 8px; text-align: center; width: 20%;">
+                    <div style="font-size: 12px; text-transform: uppercase; margin-bottom: 5px;">Underutilized</div>
+                    <div style="font-size: 32px; font-weight: bold;">${summary?.underutilized || 0}</div>
+                </td>
+                <td style="background-color: #f57c00; color: white; padding: 20px; border-radius: 8px; text-align: center; width: 20%;">
+                    <div style="font-size: 12px; text-transform: uppercase; margin-bottom: 5px;">Overutilized</div>
+                    <div style="font-size: 32px; font-weight: bold;">${summary?.overutilized || 0}</div>
+                </td>
+                <td style="background-color: #2e7d32; color: white; padding: 20px; border-radius: 8px; text-align: center; width: 20%;">
+                    <div style="font-size: 12px; text-transform: uppercase; margin-bottom: 5px;">Right-Sized</div>
+                    <div style="font-size: 32px; font-weight: bold;">${summary?.rightSized || 0}</div>
+                </td>
+                <td style="background-color: ${(summary?.netMonthlyImpact || 0) >= 0 ? '#2e7d32' : '#c62828'}; color: white; padding: 20px; border-radius: 8px; text-align: center; width: 20%;">
+                    <div style="font-size: 12px; text-transform: uppercase; margin-bottom: 5px;">Net Impact/mo</div>
+                    <div style="font-size: 32px; font-weight: bold;">${formatNetImpact(summary?.netMonthlyImpact, summary?.estimatedMonthlySavings, summary?.estimatedAdditionalCost)}</div>
+                </td>
+            </tr>
+        </table>
 
         <h2>🎯 Top Recommendations</h2>
         ${generateRecommendationsHTML(recommendations.filter(r => r.action === 'DOWNSIZE' || r.action === 'UPSIZE').slice(0, 10))}
@@ -314,9 +314,8 @@ function generateVMTableHTML(vms, recommendations, simplified = false) {
     const recMap = new Map();
     (recommendations || []).forEach(r => recMap.set(r.vmName, r));
 
-    // Limit to 50 VMs for readability
-    const displayVMs = vms.slice(0, 50);
-    const hasMore = vms.length > 50;
+    // Show all VMs in the report
+    const displayVMs = vms;
 
     let html = `
     <table>
@@ -340,10 +339,10 @@ function generateVMTableHTML(vms, recommendations, simplified = false) {
         html += `
             <tr>
                 <td><strong>${vm.vmName}</strong></td>
-                <td>${vm.vmSize}</td>
+                <td>${vm.currentSize}</td>
                 <td>${vm.location}</td>
-                <td>${formatMetric(metrics.CPU_Avg)}% / ${formatMetric(metrics.CPU_Max)}% / ${formatMetric(metrics.CPU_P95)}%</td>
-                <td>${formatMetric(metrics.Memory_Avg)}% / ${formatMetric(metrics.Memory_Max)}% / ${formatMetric(metrics.Memory_P95)}%</td>
+                <td>${formatMetric(metrics.cpuAvg)}% / ${formatMetric(metrics.cpuMax)}% / ${formatMetric(metrics.cpuP95)}%</td>
+                <td>${formatMetric(metrics.memoryAvg)}% / ${formatMetric(metrics.memoryMax)}% / ${formatMetric(metrics.memoryP95)}%</td>
                 ${!simplified ? `<td>${rec ? `${rec.action === 'DOWNSIZE' ? '⬇️' : rec.action === 'UPSIZE' ? '⬆️' : '✓'} ${rec.recommendedSize || rec.action}` : '-'}</td>` : ''}
             </tr>
         `;
@@ -353,10 +352,6 @@ function generateVMTableHTML(vms, recommendations, simplified = false) {
         </tbody>
     </table>
     `;
-
-    if (hasMore) {
-        html += `<p><em>Showing 50 of ${vms.length} VMs. Full data available upon request.</em></p>`;
-    }
 
     return html;
 }
@@ -369,7 +364,8 @@ function generateSimpleVMTableHTML(vms) {
         return '<p><em>No VMs in this category.</em></p>';
     }
 
-    const displayVMs = vms.slice(0, 20);
+    // Show all VMs
+    const displayVMs = vms;
 
     let html = `
     <table>
@@ -389,19 +385,15 @@ function generateSimpleVMTableHTML(vms) {
         html += `
             <tr>
                 <td>${vm.vmName}</td>
-                <td>${vm.vmSize}</td>
+                <td>${vm.currentSize}</td>
                 <td>${vm.location}</td>
                 <td>${vm.resourceGroup}</td>
-                <td>${vm.metrics?.CPU_SampleCount || 0}</td>
+                <td>${vm.metrics?.cpuSamples || 0}</td>
             </tr>
         `;
     });
 
     html += '</tbody></table>';
-
-    if (vms.length > 20) {
-        html += `<p><em>Showing 20 of ${vms.length} VMs.</em></p>`;
-    }
 
     return html;
 }
@@ -414,6 +406,34 @@ function formatMetric(value) {
         return 'N/A';
     }
     return value.toFixed(1);
+}
+
+/**
+ * Format net monthly impact for display.
+ * Shows savings (positive) or additional cost (negative).
+ */
+function formatNetImpact(netImpact, savings, additionalCost) {
+    // If we have specific values, use them
+    if (typeof savings === 'number' && typeof additionalCost === 'number') {
+        if (savings > 0 && additionalCost === 0) {
+            return `+$${savings}`;  // Pure savings
+        }
+        if (additionalCost > 0 && savings === 0) {
+            return `-$${additionalCost}`;  // Pure additional cost
+        }
+        if (savings > 0 || additionalCost > 0) {
+            const net = savings - additionalCost;
+            return net >= 0 ? `+$${net}` : `-$${Math.abs(net)}`;
+        }
+    }
+
+    // Use netImpact if available
+    if (typeof netImpact === 'number') {
+        if (netImpact === 0) return '$0';
+        return netImpact > 0 ? `+$${netImpact}` : `-$${Math.abs(netImpact)}`;
+    }
+
+    return '$0';
 }
 
 /**

@@ -22,7 +22,7 @@ class EmailService {
     constructor(sendGridApiKey, options = {}) {
         this.apiKey = sendGridApiKey;
         this.apiUrl = 'https://api.sendgrid.com/v3/mail/send';
-        this.fromEmail = options.fromEmail || 'vmperf-reports@noreply.azure.com';
+        this.fromEmail = options.fromEmail || 'noreply@veradigm.com';
         this.fromName = options.fromName || 'VM Performance Monitor';
     }
 

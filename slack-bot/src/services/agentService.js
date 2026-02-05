@@ -175,9 +175,24 @@ class AgentService {
                 }
             });
 
-            // Run the agent/assistant
+            // Run the agent/assistant with conversational personality instructions
+            const personalityInstructions = `
+IMPORTANT - Communication Style:
+- Be conversational and friendly, like a helpful colleague - NOT a formal system
+- Use contractions (you're, it's, don't) to sound natural
+- Acknowledge the user's request before taking action
+- Celebrate good news! Show empathy for problems.
+- Keep responses concise and actionable
+- Use emojis sparingly (1-2 max per message)
+- End with a helpful follow-up offer when appropriate
+
+AVOID: "Query executed successfully", "Based on the analysis", "Please find below"
+PREFER: "Found what you're looking for!", "Heads up -", "Here's the breakdown:"
+`;
+
             let run = await this.client.beta.threads.runs.create(threadId, {
-                assistant_id: this.agentId
+                assistant_id: this.agentId,
+                additional_instructions: personalityInstructions
             });
 
             console.log(`Started run ${run.id} for thread ${threadId}`);
@@ -423,6 +438,11 @@ class AgentService {
             {
                 patterns: [/find\s+(.+?)\s*vms?/i, /search\s+(?:for\s+)?(.+?)\s*vms?/i, /list\s+(.+?)\s*vms?/i, /show\s+(.+?)\s*vms?/i, /get\s+(.+?)\s*vms?/i],
                 template: (match) => `:mag: Searching for ${match[1]} VMs in *${subscriptionName}*...`
+            },
+            // SQL VMs - always mention image type search
+            {
+                patterns: [/sql\s*vms?/i, /find\s+sql/i, /database\s*vms?/i, /db\s*vms?/i],
+                template: () => `:mag: Searching for VMs with *SQL Server image type* in *${subscriptionName}*...\n_Using Azure Marketplace image publisher: MicrosoftSQLServer_`
             },
             // Filter by name patterns
             {

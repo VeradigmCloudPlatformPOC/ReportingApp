@@ -65,7 +65,7 @@ router.post('/analyze', async (req, res) => {
 
         if (secrets.sendGridApiKey) {
             emailService = new EmailService(secrets.sendGridApiKey, {
-                fromEmail: 'vmperf-reports@noreply.azure.com',
+                fromEmail: 'noreply@veradigm.com',
                 fromName: 'VM Performance Monitor'
             });
         }
@@ -79,12 +79,12 @@ router.post('/analyze', async (req, res) => {
             });
         }
 
-        // Step 1: Get user email from Slack profile
-        let userEmail = null;
-        if (slackUserId && slackDelivery) {
+        // Step 1: Get user email from Slack profile or use provided email
+        let userEmail = req.body.userEmail || null;
+        if (!userEmail && slackUserId && slackDelivery) {
             userEmail = await slackDelivery.getUserEmail(slackUserId);
-            console.log(`  User email: ${userEmail || 'not found'}`);
         }
+        console.log(`  User email: ${userEmail || 'not found'}`)
 
         // Step 2: Call App 3 (Long-Term LA Service) for metrics collection
         console.log(`[RightSizing] Requesting metrics from App 3...`);
@@ -345,7 +345,7 @@ router.post('/from-metrics', async (req, res) => {
 
         if (secrets.sendGridApiKey) {
             emailService = new EmailService(secrets.sendGridApiKey, {
-                fromEmail: 'vmperf-reports@noreply.azure.com',
+                fromEmail: 'noreply@veradigm.com',
                 fromName: 'VM Performance Monitor'
             });
         }
@@ -359,9 +359,9 @@ router.post('/from-metrics', async (req, res) => {
             });
         }
 
-        // Get user email
-        let userEmail = null;
-        if (slackUserId && slackDelivery) {
+        // Get user email from Slack profile or use provided email
+        let userEmail = req.body.userEmail || null;
+        if (!userEmail && slackUserId && slackDelivery) {
             userEmail = await slackDelivery.getUserEmail(slackUserId);
         }
 
@@ -456,25 +456,94 @@ router.post('/from-metrics', async (req, res) => {
 });
 
 /**
- * Fetch metrics from App 3 (Long-Term Log Analytics Service).
+ * Fetch metrics from App 3 using queue-based reliable processing.
+ * This uses the v12 reliable endpoint with Azure Storage Queue.
  */
 async function fetchMetricsFromApp3({ subscriptionId, tenantId, timeRangeDays, maxVMs, serviceUrl }) {
+    const MAX_POLL_TIME_MS = 600000; // 10 minutes max
+    const POLL_INTERVAL_MS = 5000;   // Poll every 5 seconds
+
     try {
-        const response = await axios.post(
-            `${serviceUrl}/api/metrics/collect`,
+        // Step 1: Start reliable collection job
+        console.log(`[RightSizing] Starting reliable metrics collection job...`);
+        const startResponse = await axios.post(
+            `${serviceUrl}/api/metrics/collect/reliable`,
             {
                 subscriptionId,
                 tenantId,
-                timeRangeDays,
-                maxVMs
+                timeRangeDays
             },
             {
-                timeout: 300000, // 5 minutes
+                timeout: 30000,
                 headers: { 'Content-Type': 'application/json' }
             }
         );
 
-        return response.data;
+        if (!startResponse.data.success) {
+            return {
+                success: false,
+                error: startResponse.data.error || 'Failed to start collection job'
+            };
+        }
+
+        const { jobId, batchCount, vmCount } = startResponse.data;
+        console.log(`[RightSizing] Job ${jobId} created: ${vmCount} VMs in ${batchCount} batches`);
+
+        // Step 2: Poll for job completion
+        const startTime = Date.now();
+        let lastStatus = null;
+
+        while (Date.now() - startTime < MAX_POLL_TIME_MS) {
+            await sleep(POLL_INTERVAL_MS);
+
+            const statusResponse = await axios.get(
+                `${serviceUrl}/api/metrics/job/${jobId}`,
+                { timeout: 10000 }
+            );
+
+            const status = statusResponse.data;
+
+            // Log progress if changed
+            if (status.completedBatches !== lastStatus?.completedBatches) {
+                console.log(`[RightSizing] Job progress: ${status.completedBatches}/${status.totalBatches} batches complete`);
+            }
+            lastStatus = status;
+
+            if (status.status?.toUpperCase() === 'COMPLETED') {
+                console.log(`[RightSizing] Job ${jobId} completed successfully`);
+                break;
+            }
+
+            if (status.status?.toUpperCase() === 'FAILED') {
+                return {
+                    success: false,
+                    error: `Job failed: ${status.error || 'Unknown error'}`
+                };
+            }
+        }
+
+        if (lastStatus?.status?.toUpperCase() !== 'COMPLETED') {
+            return {
+                success: false,
+                error: 'Job timed out after 10 minutes'
+            };
+        }
+
+        // Step 3: Get results
+        console.log(`[RightSizing] Retrieving results for job ${jobId}...`);
+        const resultsResponse = await axios.get(
+            `${serviceUrl}/api/metrics/job/${jobId}/results`,
+            { timeout: 60000 }
+        );
+
+        if (!resultsResponse.data.success) {
+            return {
+                success: false,
+                error: resultsResponse.data.error || 'Failed to retrieve results'
+            };
+        }
+
+        return resultsResponse.data;
 
     } catch (error) {
         console.error('[RightSizing] Failed to fetch metrics from App 3:', error.message);
@@ -491,6 +560,13 @@ async function fetchMetricsFromApp3({ subscriptionId, tenantId, timeRangeDays, m
             error: error.response?.data?.message || error.message
         };
     }
+}
+
+/**
+ * Sleep helper function.
+ */
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 module.exports = router;

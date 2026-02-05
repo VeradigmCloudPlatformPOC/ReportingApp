@@ -77,7 +77,8 @@ async function loadSecrets() {
         'LogAnalyticsTenantId',
         'LogAnalyticsWorkspaceId',
         'TargetSubscriptionId',
-        'MultiTenantConfig'
+        'MultiTenantConfig',
+        'StorageAccountConnectionString'  // v12: For queue-based batch processing
     ];
 
     const secrets = {};
