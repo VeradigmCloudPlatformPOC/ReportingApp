@@ -147,6 +147,14 @@ class AgentService {
         }
 
         try {
+            // Send initial acknowledgment with context paraphrasing
+            if (statusCallback && context.subscriptionName) {
+                const ackMessage = this.generateAcknowledgment(userMessage, context);
+                if (ackMessage) {
+                    await statusCallback(ackMessage);
+                }
+            }
+
             // Create new thread if needed
             if (!threadId) {
                 const thread = await this.client.beta.threads.create();
@@ -381,6 +389,116 @@ class AgentService {
      */
     sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Generate a context-aware acknowledgment message for the user's request.
+     * Paraphrases the user's intent with subscription context.
+     *
+     * @param {string} userMessage - The user's message
+     * @param {Object} context - Context including subscription info
+     * @returns {string|null} Acknowledgment message or null if not applicable
+     */
+    generateAcknowledgment(userMessage, context) {
+        const message = userMessage.toLowerCase().trim();
+        const subscriptionName = context.subscriptionName || 'your subscription';
+
+        // Skip acknowledgment for greetings and simple queries
+        const skipPatterns = [
+            /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|sure)[\s!.]*$/i,
+            /^help$/i,
+            /^clear$/i,
+            /^\?$/
+        ];
+
+        for (const pattern of skipPatterns) {
+            if (pattern.test(message)) {
+                return null;
+            }
+        }
+
+        // Intent patterns and their acknowledgment templates
+        const intentPatterns = [
+            // VM search patterns
+            {
+                patterns: [/find\s+(.+?)\s*vms?/i, /search\s+(?:for\s+)?(.+?)\s*vms?/i, /list\s+(.+?)\s*vms?/i, /show\s+(.+?)\s*vms?/i, /get\s+(.+?)\s*vms?/i],
+                template: (match) => `:mag: Searching for ${match[1]} VMs in *${subscriptionName}*...`
+            },
+            // Filter by name patterns
+            {
+                patterns: [/filter\s+(?:for\s+)?(?:all\s+)?(.+?)\s*vms?/i, /vms?\s+(?:with|named|like)\s+(.+)/i],
+                template: (match) => `:mag: Finding all ${match[1]} VMs in *${subscriptionName}*...`
+            },
+            // List all VMs
+            {
+                patterns: [/list\s+(?:all\s+)?vms?/i, /show\s+(?:all\s+)?vms?/i, /get\s+(?:all\s+)?vms?/i, /all\s+vms?/i],
+                template: () => `:file_cabinet: Listing all VMs in *${subscriptionName}*...`
+            },
+            // VM count
+            {
+                patterns: [/how\s+many\s+vms?/i, /count\s+(?:of\s+)?vms?/i, /number\s+of\s+vms?/i],
+                template: () => `:1234: Counting VMs in *${subscriptionName}*...`
+            },
+            // High CPU/Memory
+            {
+                patterns: [/high\s+cpu/i, /cpu\s+(?:above|over|greater|>)\s*(\d+)/i],
+                template: (match) => `:fire: Looking for VMs with high CPU usage in *${subscriptionName}*...`
+            },
+            {
+                patterns: [/high\s+memory/i, /memory\s+(?:above|over|greater|>)\s*(\d+)/i],
+                template: (match) => `:fire: Looking for VMs with high memory usage in *${subscriptionName}*...`
+            },
+            // Underutilized/overutilized
+            {
+                patterns: [/underutilized/i, /under-utilized/i, /idle\s+vms?/i, /low\s+usage/i],
+                template: () => `:chart_with_downwards_trend: Finding underutilized VMs in *${subscriptionName}*...`
+            },
+            {
+                patterns: [/overutilized/i, /over-utilized/i, /overloaded/i],
+                template: () => `:chart_with_upwards_trend: Finding overutilized VMs in *${subscriptionName}*...`
+            },
+            // Performance report
+            {
+                patterns: [/performance\s+report/i, /run\s+(?:a\s+)?report/i, /analyze\s+performance/i, /full\s+analysis/i],
+                template: () => `:rocket: Starting performance analysis for *${subscriptionName}*...`
+            },
+            // Investigate specific VM
+            {
+                patterns: [/investigate\s+(.+)/i, /check\s+(?:on\s+)?(.+)/i, /look\s+at\s+(.+)/i, /details\s+(?:for|on)\s+(.+)/i],
+                template: (match) => `:microscope: Investigating *${match[1].trim()}* in *${subscriptionName}*...`
+            },
+            // Running/stopped VMs
+            {
+                patterns: [/running\s+vms?/i, /vms?\s+(?:that\s+are\s+)?running/i],
+                template: () => `:green_circle: Finding running VMs in *${subscriptionName}*...`
+            },
+            {
+                patterns: [/stopped\s+vms?/i, /deallocated\s+vms?/i, /vms?\s+(?:that\s+are\s+)?stopped/i],
+                template: () => `:red_circle: Finding stopped VMs in *${subscriptionName}*...`
+            },
+            // Location-based queries
+            {
+                patterns: [/vms?\s+in\s+(east\s*us|west\s*us|central\s*us|north\s*europe|west\s*europe|[a-z]+\d*)/i, /in\s+(east\s*us|west\s*us|central\s*us|north\s*europe|west\s*europe|[a-z]+\d*)\s+region/i],
+                template: (match) => `:earth_americas: Looking for VMs in *${match[1]}* region in *${subscriptionName}*...`
+            },
+            // Generic query fallback
+            {
+                patterns: [/^.{10,}$/],  // Any message with 10+ characters
+                template: () => `:hourglass_flowing_sand: Processing your request for *${subscriptionName}*...`
+            }
+        ];
+
+        // Try to match intent patterns
+        for (const intent of intentPatterns) {
+            for (const pattern of intent.patterns) {
+                const match = message.match(pattern);
+                if (match) {
+                    return intent.template(match);
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

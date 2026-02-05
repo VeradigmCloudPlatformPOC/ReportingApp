@@ -192,6 +192,42 @@ Resources
 | project name, resourceGroup, location, powerState
 \`\`\`
 
+### Search VMs by name pattern
+\`\`\`
+Resources
+| where type == 'microsoft.compute/virtualmachines'
+| where name contains 'sql' or name contains 'db'
+| project name, resourceGroup, location, subscriptionId
+| order by name asc
+\`\`\`
+
+### SQL VMs (by name, image, or tags)
+When searching for "SQL VMs", search by multiple criteria:
+\`\`\`
+Resources
+| where type == 'microsoft.compute/virtualmachines'
+| extend vmSize = tostring(properties.hardwareProfile.vmSize)
+| extend publisher = tostring(properties.storageProfile.imageReference.publisher)
+| extend offer = tostring(properties.storageProfile.imageReference.offer)
+| extend sku = tostring(properties.storageProfile.imageReference.sku)
+| where name contains_cs 'sql' or name contains_cs 'SQL'
+     or name contains_cs 'db' or name contains_cs 'DB'
+     or name contains_cs 'PPDB' or name contains_cs 'ppdb'
+     or publisher =~ 'MicrosoftSQLServer'
+     or offer contains 'sql' or sku contains 'sql'
+     or tags['workload'] =~ 'sql' or tags['application'] contains 'sql'
+| project name, resourceGroup, location, vmSize, publisher, offer, sku
+| order by name asc
+\`\`\`
+
+### VMs by name pattern (case-insensitive)
+\`\`\`
+Resources
+| where type == 'microsoft.compute/virtualmachines'
+| where name contains 'pattern'
+| project name, resourceGroup, location
+\`\`\`
+
 ## Response Format
 Return ONLY the Resource Graph query. No explanations, no markdown code blocks.
 If the request cannot be translated, respond with:
@@ -333,7 +369,9 @@ function determineQueryType(userRequest) {
         'how many vms', 'count vms', 'vms in resource group',
         'vms by location', 'vms by region', 'vms by tag',
         'running vms', 'stopped vms', 'deallocated',
-        'vm configuration', 'vm config'
+        'vm configuration', 'vm config',
+        'find vms', 'search vms', 'sql vms', 'database vms',
+        'find sql', 'find db', 'find all', 'search for'
     ];
 
     // Keywords that suggest KQL (performance/metrics queries)

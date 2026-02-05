@@ -1,16 +1,25 @@
 /**
  * @fileoverview Orchestration Client Service
  *
- * HTTP client for communicating with the vmperf-orchestrator container app.
- * Handles triggering analysis, fetching status, and querying results.
+ * HTTP client with smart routing to microservices:
+ * - App 1: Resource Graph Service (VM inventory, search, summary)
+ * - App 2: Short-Term Log Analytics (KQL queries ≤10 days)
+ * - App 3: Long-Term Log Analytics + AI (queries >10 days, reports)
+ * - Legacy: Old orchestrator (for features not yet migrated)
  *
- * @version v7-slack-bot
+ * @version v11-microservices
  * @author VM Performance Monitoring Team
  */
 
 const axios = require('axios');
 
-let orchestratorUrl = null;
+// Service URLs (set from environment or config)
+let serviceUrls = {
+    resourceGraph: null,    // App 1
+    shortTermLA: null,      // App 2
+    longTermLA: null,       // App 3
+    orchestrator: null      // Legacy (fallback)
+};
 
 /**
  * Initialize the orchestration client services.
@@ -18,43 +27,383 @@ let orchestratorUrl = null;
  * @param {Object} config - Configuration object
  */
 async function initializeServices(config) {
-    orchestratorUrl = config.orchestratorUrl;
-    console.log(`Orchestration client initialized: ${orchestratorUrl}`);
+    serviceUrls = {
+        resourceGraph: config.resourceGraphUrl || process.env.RESOURCE_GRAPH_SERVICE_URL,
+        shortTermLA: config.shortTermLAUrl || process.env.SHORT_TERM_LA_SERVICE_URL,
+        longTermLA: config.longTermLAUrl || process.env.LONG_TERM_LA_SERVICE_URL,
+        orchestrator: config.orchestratorUrl || process.env.ORCHESTRATOR_URL
+    };
+
+    console.log('[OrchestrationClient] Initialized with services:');
+    console.log(`  Resource Graph (App 1): ${serviceUrls.resourceGraph || 'not configured'}`);
+    console.log(`  Short-Term LA (App 2): ${serviceUrls.shortTermLA || 'not configured'}`);
+    console.log(`  Long-Term LA (App 3): ${serviceUrls.longTermLA || 'not configured'}`);
+    console.log(`  Legacy Orchestrator: ${serviceUrls.orchestrator || 'not configured'}`);
 }
 
 class OrchestrationClient {
     /**
      * Create an OrchestrationClient instance.
      *
-     * @param {string} baseUrl - Orchestrator service URL
+     * @param {string} baseUrl - Legacy orchestrator URL (for backward compatibility)
      */
     constructor(baseUrl) {
-        this.baseUrl = baseUrl || orchestratorUrl || 'http://localhost:3000';
-        this.client = axios.create({
-            baseURL: this.baseUrl,
-            timeout: 60000, // 60 seconds for most operations
-            headers: {
-                'Content-Type': 'application/json'
-            }
+        // Legacy orchestrator URL
+        this.baseUrl = baseUrl || serviceUrls.orchestrator || 'http://localhost:3000';
+
+        // Create axios clients for each service
+        this.clients = {
+            resourceGraph: this._createClient(serviceUrls.resourceGraph, 30000),
+            shortTermLA: this._createClient(serviceUrls.shortTermLA, 90000),
+            longTermLA: this._createClient(serviceUrls.longTermLA, 120000),
+            orchestrator: this._createClient(this.baseUrl, 60000)
+        };
+    }
+
+    /**
+     * Create an axios client instance.
+     */
+    _createClient(baseUrl, timeout) {
+        if (!baseUrl) return null;
+        return axios.create({
+            baseURL: baseUrl,
+            timeout,
+            headers: { 'Content-Type': 'application/json' }
         });
     }
 
     /**
+     * Get the appropriate client, falling back to orchestrator if service not available.
+     */
+    _getClient(serviceName) {
+        const client = this.clients[serviceName];
+        if (client) return client;
+        console.warn(`[OrchestrationClient] ${serviceName} not configured, falling back to orchestrator`);
+        return this.clients.orchestrator;
+    }
+
+    // =========================================================================
+    // APP 1: RESOURCE GRAPH SERVICE
+    // =========================================================================
+
+    /**
+     * Get VM inventory with optional filters.
+     * Routes to: App 1 (Resource Graph Service)
+     */
+    async getInventory(filters = {}) {
+        const client = this._getClient('resourceGraph');
+        if (!client) {
+            throw new Error('No service configured for inventory');
+        }
+
+        try {
+            // Try new App 1 endpoint
+            if (this.clients.resourceGraph) {
+                const response = await this.clients.resourceGraph.post('/api/resources/vms', {
+                    tenantId: filters.tenantName,
+                    subscriptionId: filters.subscriptionId,
+                    location: filters.location,
+                    includeNetwork: filters.includeNetwork
+                });
+                return response.data;
+            }
+            // Fallback to legacy
+            const response = await this.clients.orchestrator.get('/api/inventory', {
+                params: { ...filters, includeNetwork: filters.includeNetwork ? 'true' : undefined }
+            });
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] getInventory error:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Search VMs by name pattern.
+     * Routes to: App 1 (Resource Graph Service)
+     */
+    async searchVMs(pattern) {
+        try {
+            if (this.clients.resourceGraph) {
+                const response = await this.clients.resourceGraph.post('/api/resources/search', {
+                    pattern
+                });
+                return response.data;
+            }
+            // Fallback to legacy
+            const response = await this.clients.orchestrator.get('/api/vms/search', {
+                params: { q: pattern }
+            });
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] searchVMs error:', error.message);
+            return { vms: [], rowCount: 0 };
+        }
+    }
+
+    /**
+     * Get cross-tenant summary.
+     * Routes to: App 1 (Resource Graph Service)
+     */
+    async getCrosstenantSummary() {
+        try {
+            if (this.clients.resourceGraph) {
+                const response = await this.clients.resourceGraph.get('/api/resources/summary/cross-tenant');
+                return response.data;
+            }
+            // Fallback to legacy
+            const response = await this.clients.orchestrator.get('/api/summary');
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] getCrosstenantSummary error:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Get summary grouped by location, resource group, or size.
+     * Routes to: App 1 (Resource Graph Service)
+     */
+    async getSummary(groupBy = 'location', filters = {}) {
+        try {
+            if (this.clients.resourceGraph) {
+                const response = await this.clients.resourceGraph.post('/api/resources/summary', {
+                    groupBy,
+                    tenantId: filters.tenantId,
+                    subscriptionId: filters.subscriptionId
+                });
+                return response.data;
+            }
+            // Fallback to legacy
+            const response = await this.clients.orchestrator.get('/api/summary');
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] getSummary error:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Get all subscriptions across all tenants.
+     * Routes to: Legacy Orchestrator (has complete tenant config)
+     * TODO: Move to App 1 once tenant config is migrated
+     */
+    async getSubscriptions() {
+        try {
+            // Use legacy orchestrator for subscriptions (has full tenant config)
+            const response = await this.clients.orchestrator.get('/api/subscriptions');
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] getSubscriptions error:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Search subscriptions by name pattern.
+     * Routes to: Legacy Orchestrator (has complete tenant config)
+     */
+    async searchSubscriptions(query) {
+        try {
+            // Use legacy orchestrator for subscription search (has full tenant config)
+            const response = await this.clients.orchestrator.get('/api/subscriptions/search', {
+                params: { q: query }
+            });
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] searchSubscriptions error:', error.message);
+            return { subscriptions: [] };
+        }
+    }
+
+    /**
+     * Get tenants.
+     * Routes to: App 1 (Resource Graph Service)
+     */
+    async getTenants(enabledOnly = true) {
+        try {
+            if (this.clients.resourceGraph) {
+                const response = await this.clients.resourceGraph.get('/api/tenants');
+                return response.data;
+            }
+            // Fallback to legacy
+            const response = await this.clients.orchestrator.get('/api/tenants', {
+                params: { enabledOnly }
+            });
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] getTenants error:', error.message);
+            throw error;
+        }
+    }
+
+    // =========================================================================
+    // APP 2: SHORT-TERM LOG ANALYTICS SERVICE (≤10 days)
+    // =========================================================================
+
+    /**
+     * Execute a dynamic KQL query.
+     * Routes to: App 2 for ≤10 days, App 3 for >10 days
+     */
+    async executeDynamicKql(query, options = {}) {
+        try {
+            // Check query time range to determine routing
+            const daysMatch = query.match(/ago\s*\(\s*(\d+)\s*d\s*\)/i);
+            const queryDays = daysMatch ? parseInt(daysMatch[1]) : 7;
+
+            // Route to App 2 for short queries (≤10 days)
+            if (queryDays <= 10 && this.clients.shortTermLA) {
+                const response = await this.clients.shortTermLA.post('/api/query/kql', {
+                    query,
+                    options: {
+                        tenantId: options.tenantId,
+                        subscriptionId: options.subscriptionId,
+                        workspaceId: options.workspaceId,
+                        maxResults: options.maxResults || 1000
+                    },
+                    format: 'json'
+                }, {
+                    headers: {
+                        'X-User-Id': options.userId || 'unknown',
+                        'X-Channel': options.channel || 'slack'
+                    }
+                });
+                return response.data;
+            }
+
+            // Route to App 3 for long queries (>10 days) - if available
+            if (this.clients.longTermLA) {
+                // TODO: Implement when App 3 is ready
+                console.log('[OrchestrationClient] Long-term query - routing to App 3 (not yet implemented)');
+            }
+
+            // Fallback to legacy orchestrator
+            const response = await this.clients.orchestrator.post('/api/query/dynamic-kql', {
+                query,
+                subscriptionId: options.subscriptionId,
+                workspaceId: options.workspaceId,
+                tenantId: options.tenantId,
+                maxResults: options.maxResults || 1000,
+                timeoutMs: options.timeoutMs || 60000,
+                userId: options.userId,
+                channel: options.channel || 'slack'
+            }, {
+                timeout: Math.min(options.timeoutMs || 60000, 300000) + 5000
+            });
+            return response.data;
+        } catch (error) {
+            if (error.response?.data) {
+                return error.response.data;
+            }
+            return {
+                success: false,
+                error: 'NETWORK_ERROR',
+                message: error.message
+            };
+        }
+    }
+
+    /**
+     * Get VM performance metrics.
+     * Routes to: App 2 (Short-Term Log Analytics)
+     */
+    async getVMMetrics(vmName, days = 7, options = {}) {
+        try {
+            if (this.clients.shortTermLA) {
+                const response = await this.clients.shortTermLA.get(`/api/metrics/vm/${encodeURIComponent(vmName)}`, {
+                    params: {
+                        days: Math.min(days, 10),
+                        tenantId: options.tenantId,
+                        subscriptionId: options.subscriptionId
+                    }
+                });
+                return response.data;
+            }
+            // No fallback for this new endpoint
+            return { success: false, error: 'Short-term LA service not configured' };
+        } catch (error) {
+            console.error('[OrchestrationClient] getVMMetrics error:', error.message);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Get VMs with high resource usage.
+     * Routes to: App 2 (Short-Term Log Analytics)
+     */
+    async getHighUsageVMs(metric = 'cpu', threshold = 80, days = 7, options = {}) {
+        try {
+            if (this.clients.shortTermLA) {
+                const response = await this.clients.shortTermLA.get('/api/metrics/high-usage', {
+                    params: {
+                        metric,
+                        threshold,
+                        days: Math.min(days, 10),
+                        tenantId: options.tenantId,
+                        subscriptionId: options.subscriptionId
+                    }
+                });
+                return response.data;
+            }
+            // No fallback for this new endpoint
+            return { success: false, error: 'Short-term LA service not configured' };
+        } catch (error) {
+            console.error('[OrchestrationClient] getHighUsageVMs error:', error.message);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Get VM heartbeat/availability data.
+     * Routes to: App 2 (Short-Term Log Analytics)
+     */
+    async getHeartbeat(hours = 24, options = {}) {
+        try {
+            if (this.clients.shortTermLA) {
+                const response = await this.clients.shortTermLA.get('/api/heartbeat', {
+                    params: {
+                        hours: Math.min(hours, 240), // Max 10 days
+                        tenantId: options.tenantId
+                    }
+                });
+                return response.data;
+            }
+            return { success: false, error: 'Short-term LA service not configured' };
+        } catch (error) {
+            console.error('[OrchestrationClient] getHeartbeat error:', error.message);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Validate a KQL query without executing.
+     * Routes to: App 2 (Short-Term Log Analytics)
+     */
+    async validateKqlQuery(query) {
+        try {
+            if (this.clients.shortTermLA) {
+                const response = await this.clients.shortTermLA.post('/api/query/validate', { query });
+                return response.data;
+            }
+            // No validation in legacy - assume valid
+            return { valid: true, errors: [], warnings: [] };
+        } catch (error) {
+            console.error('[OrchestrationClient] validateKqlQuery error:', error.message);
+            return { valid: false, errors: [error.message], warnings: [] };
+        }
+    }
+
+    // =========================================================================
+    // LEGACY ORCHESTRATOR METHODS (for features not yet migrated)
+    // =========================================================================
+
+    /**
      * Trigger a new orchestration run.
-     *
-     * @param {Object} options - Orchestration options
-     * @param {string} options.channelId - Slack channel ID
-     * @param {string} options.requestedBy - User who triggered the run
-     * @param {string} options.requestedByEmail - Email of user who triggered (for reports)
-     * @param {string} options.subscriptionId - Target subscription ID (overrides default)
-     * @param {string} options.tenantName - Specific tenant to run for (optional)
-     * @param {number} options.days - Number of days to analyze (default: 30)
-     * @returns {Promise<string>} Run ID
+     * Routes to: Legacy Orchestrator (will be App 3)
      */
     async triggerOrchestration(options = {}) {
         try {
-            // Use longer timeout for orchestration trigger (may take time to initialize)
-            const response = await this.client.post('/api/orchestrate', {
+            const response = await this.clients.orchestrator.post('/api/orchestrate', {
                 channelId: options.channelId,
                 requestedBy: options.requestedBy,
                 requestedByEmail: options.requestedByEmail,
@@ -64,25 +413,21 @@ class OrchestrationClient {
                 days: options.days || 30,
                 callbackUrl: options.callbackUrl
             }, {
-                timeout: 300000 // 5 minutes for orchestration trigger
+                timeout: 300000
             });
-
             return response.data;
         } catch (error) {
-            console.error('Failed to trigger orchestration:', error.message);
+            console.error('[OrchestrationClient] triggerOrchestration error:', error.message);
             throw new Error(`Orchestration failed: ${error.response?.data?.message || error.message}`);
         }
     }
 
     /**
      * Get status of a run.
-     *
-     * @param {string} runId - Run identifier
-     * @returns {Promise<Object>} Run status with progress
      */
     async getRunStatus(runId) {
         try {
-            const response = await this.client.get(`/api/runs/${runId}/status`);
+            const response = await this.clients.orchestrator.get(`/api/runs/${runId}/status`);
             return response.data;
         } catch (error) {
             if (error.response?.status === 404) {
@@ -93,14 +438,11 @@ class OrchestrationClient {
     }
 
     /**
-     * Get the latest run for a subscription.
-     *
-     * @param {string} subscriptionId - Subscription ID (or 'all')
-     * @returns {Promise<Object|null>} Latest run or null
+     * Get the latest run.
      */
     async getLatestRun(subscriptionId = 'all') {
         try {
-            const response = await this.client.get(`/api/runs/latest`, {
+            const response = await this.clients.orchestrator.get('/api/runs/latest', {
                 params: { subscriptionId }
             });
             return response.data;
@@ -114,31 +456,24 @@ class OrchestrationClient {
 
     /**
      * Get VMs filtered by status from latest run.
-     *
-     * @param {string} status - Status to filter by (UNDERUTILIZED, OVERUTILIZED, OPTIMAL)
-     * @param {string} subscriptionId - Optional subscription ID to filter by
-     * @returns {Promise<Array>} Array of VM analyses
      */
     async getVMsByStatus(status, subscriptionId = null) {
         try {
             const params = subscriptionId ? { subscriptionId } : {};
-            const response = await this.client.get(`/api/vms/status/${status}`, { params });
+            const response = await this.clients.orchestrator.get(`/api/vms/status/${status}`, { params });
             return response.data;
         } catch (error) {
-            console.error('Failed to get VMs by status:', error.message);
+            console.error('[OrchestrationClient] getVMsByStatus error:', error.message);
             throw error;
         }
     }
 
     /**
-     * Get details for a specific VM.
-     *
-     * @param {string} vmName - VM name
-     * @returns {Promise<Object|null>} VM details or null
+     * Get details for a specific VM (from analysis).
      */
     async getVMDetails(vmName) {
         try {
-            const response = await this.client.get(`/api/vms/${encodeURIComponent(vmName)}`);
+            const response = await this.clients.orchestrator.get(`/api/vms/${encodeURIComponent(vmName)}`);
             return response.data;
         } catch (error) {
             if (error.response?.status === 404) {
@@ -149,121 +484,7 @@ class OrchestrationClient {
     }
 
     /**
-     * Search VMs by name pattern.
-     *
-     * @param {string} pattern - Search pattern
-     * @returns {Promise<Array>} Matching VMs
-     */
-    async searchVMs(pattern) {
-        try {
-            const response = await this.client.get(`/api/vms/search`, {
-                params: { q: pattern }
-            });
-            return response.data;
-        } catch (error) {
-            console.error('Failed to search VMs:', error.message);
-            return [];
-        }
-    }
-
-    /**
-     * Get VM inventory with optional filters.
-     *
-     * @param {Object} filters - Inventory filters
-     * @param {string} filters.tenantName - Filter by tenant
-     * @param {string} filters.location - Filter by location
-     * @param {Object} filters.tag - Filter by tag {key, value}
-     * @param {string} filters.sizePattern - Filter by size pattern
-     * @param {boolean} filters.includeNetwork - Include network details (Private IP, VNET/SNET)
-     * @returns {Promise<Array>} VM inventory
-     */
-    async getInventory(filters = {}) {
-        try {
-            const response = await this.client.get(`/api/inventory`, {
-                params: {
-                    ...filters,
-                    includeNetwork: filters.includeNetwork ? 'true' : undefined
-                }
-            });
-            return response.data;
-        } catch (error) {
-            console.error('Failed to get inventory:', error.message);
-            throw error;
-        }
-    }
-
-    /**
-     * Get tenant configurations.
-     *
-     * @param {boolean} enabledOnly - Only return enabled tenants
-     * @returns {Promise<Array>} Tenant configurations
-     */
-    async getTenants(enabledOnly = true) {
-        try {
-            const response = await this.client.get(`/api/tenants`, {
-                params: { enabledOnly }
-            });
-            return response.data;
-        } catch (error) {
-            console.error('Failed to get tenants:', error.message);
-            throw error;
-        }
-    }
-
-    /**
-     * Get cross-tenant summary.
-     *
-     * @returns {Promise<Object>} Summary statistics
-     */
-    async getCrosstenantSummary() {
-        try {
-            const response = await this.client.get(`/api/summary`);
-            return response.data;
-        } catch (error) {
-            console.error('Failed to get summary:', error.message);
-            throw error;
-        }
-    }
-
-    /**
-     * Get all subscriptions across all tenants.
-     *
-     * @returns {Promise<Array>} Array of subscriptions with name, id, tenant info
-     */
-    async getSubscriptions() {
-        try {
-            const response = await this.client.get(`/api/subscriptions`);
-            return response.data;
-        } catch (error) {
-            console.error('Failed to get subscriptions:', error.message);
-            throw error;
-        }
-    }
-
-    /**
-     * Search subscriptions by name pattern.
-     *
-     * @param {string} query - Search query (subscription name)
-     * @returns {Promise<Array>} Matching subscriptions
-     */
-    async searchSubscriptions(query) {
-        try {
-            const response = await this.client.get(`/api/subscriptions/search`, {
-                params: { q: query }
-            });
-            return response.data;
-        } catch (error) {
-            console.error('Failed to search subscriptions:', error.message);
-            return [];
-        }
-    }
-
-    /**
-     * Get report download links for the latest run.
-     *
-     * @param {string} subscriptionId - Optional subscription ID filter
-     * @param {number} expiryHours - Hours until links expire (default 1, max 24)
-     * @returns {Promise<Object>} Download links with runId and expiry info
+     * Get report download links.
      */
     async getReportDownloads(subscriptionId = null, expiryHours = 1) {
         try {
@@ -271,113 +492,38 @@ class OrchestrationClient {
             if (subscriptionId) params.subscriptionId = subscriptionId;
             if (expiryHours) params.expiryHours = Math.min(expiryHours, 24);
 
-            const response = await this.client.get('/api/reports/latest/download', { params });
+            const response = await this.clients.orchestrator.get('/api/reports/latest/download', { params });
             return response.data;
         } catch (error) {
             if (error.response?.status === 404) {
                 return { error: 'No reports found', downloads: null };
             }
-            console.error('Failed to get report downloads:', error.message);
             throw error;
         }
     }
 
     /**
-     * Get summary from the latest analysis run (not live inventory).
-     * This returns VM counts from the most recent completed analysis.
-     *
-     * @param {string} subscriptionId - Optional subscription ID filter
-     * @returns {Promise<Object>} Run summary with status breakdown
+     * Get run summary.
      */
     async getRunSummary(subscriptionId = null) {
         try {
             const params = subscriptionId ? { subscriptionId } : {};
-            const response = await this.client.get('/api/runs/latest/summary', { params });
+            const response = await this.clients.orchestrator.get('/api/runs/latest/summary', { params });
             return response.data;
         } catch (error) {
             if (error.response?.status === 404) {
                 return null;
             }
-            console.error('Failed to get run summary:', error.message);
             throw error;
         }
     }
 
     /**
-     * Health check.
-     *
-     * @returns {Promise<boolean>} True if service is healthy
-     */
-    async healthCheck() {
-        try {
-            const response = await this.client.get('/health');
-            return response.data.status === 'healthy';
-        } catch (error) {
-            return false;
-        }
-    }
-
-    // =========================================================================
-    // DYNAMIC QUERY METHODS (v9)
-    // =========================================================================
-
-    /**
-     * Execute a dynamic KQL query against Log Analytics.
-     *
-     * @param {string} query - KQL query to execute
-     * @param {Object} options - Execution options
-     * @param {string} options.subscriptionId - Target subscription
-     * @param {string} options.workspaceId - Log Analytics workspace ID
-     * @param {string} options.tenantId - Azure AD tenant ID
-     * @param {number} options.maxResults - Maximum results (default: 1000)
-     * @param {number} options.timeoutMs - Query timeout in ms (default: 60000)
-     * @param {string} options.userId - User who initiated the query
-     * @param {string} options.channel - Channel (slack, teams, api)
-     * @returns {Promise<Object>} Query results
-     */
-    async executeDynamicKql(query, options = {}) {
-        try {
-            const response = await this.client.post('/api/query/dynamic-kql', {
-                query,
-                subscriptionId: options.subscriptionId,
-                workspaceId: options.workspaceId,
-                tenantId: options.tenantId,
-                maxResults: options.maxResults || 1000,
-                timeoutMs: options.timeoutMs || 60000,
-                userId: options.userId,
-                channel: options.channel || 'slack'
-            }, {
-                timeout: Math.min(options.timeoutMs || 60000, 300000) + 5000 // Query timeout + buffer
-            });
-
-            return response.data;
-        } catch (error) {
-            if (error.response?.data) {
-                return error.response.data;
-            }
-            return {
-                success: false,
-                error: 'NETWORK_ERROR',
-                message: error.message
-            };
-        }
-    }
-
-    /**
      * Execute a dynamic Resource Graph query.
-     *
-     * @param {string} query - Resource Graph query to execute
-     * @param {Object} options - Execution options
-     * @param {Array<string>} options.subscriptionIds - Subscriptions to query
-     * @param {string} options.tenantId - Azure AD tenant ID
-     * @param {number} options.maxResults - Maximum results (default: 1000)
-     * @param {string} options.userId - User who initiated the query
-     * @param {string} options.channel - Channel (slack, teams, api)
-     * @returns {Promise<Object>} Query results
      */
     async executeDynamicResourceGraph(query, options = {}) {
         try {
-            const response = await this.client.post('/api/query/dynamic-resourcegraph', {
+            const response = await this.clients.orchestrator.post('/api/query/dynamic-resourcegraph', {
                 query,
                 subscriptionIds: options.subscriptionIds,
                 tenantId: options.tenantId,
@@ -385,9 +531,8 @@ class OrchestrationClient {
                 userId: options.userId,
                 channel: options.channel || 'slack'
             }, {
-                timeout: 65000 // 65 seconds
+                timeout: 65000
             });
-
             return response.data;
         } catch (error) {
             if (error.response?.data) {
@@ -402,45 +547,37 @@ class OrchestrationClient {
     }
 
     /**
-     * Format query results for a specific channel.
-     *
-     * @param {Object} results - Query results to format
-     * @param {string} format - Output format ('slack' or 'email')
-     * @param {number} maxRows - Maximum rows to include
-     * @returns {Promise<Object>} Formatted result
+     * Format query results.
      */
     async formatQueryResults(results, format = 'slack', maxRows = 20) {
         try {
-            const response = await this.client.post('/api/query/format', {
+            // Try App 2 first for formatting
+            if (this.clients.shortTermLA) {
+                const response = await this.clients.shortTermLA.post('/api/format', {
+                    results,
+                    format,
+                    maxRows
+                });
+                return response.data;
+            }
+            // Fallback to orchestrator
+            const response = await this.clients.orchestrator.post('/api/query/format', {
                 results,
                 format,
                 maxRows
             });
             return response.data;
         } catch (error) {
-            return {
-                success: false,
-                error: error.message
-            };
+            return { success: false, error: error.message };
         }
     }
 
     /**
-     * Send dynamic query results via email.
-     * Used when results exceed the threshold for Slack display (>50 rows).
-     *
-     * @param {Object} options - Email options
-     * @param {Object} options.results - Query results object
-     * @param {string} options.originalQuery - The generated query
-     * @param {string} options.queryType - 'kql' or 'resourcegraph'
-     * @param {string} options.userEmail - Recipient email address
-     * @param {string} options.userName - User's display name
-     * @param {string} options.synthesis - AI-generated analysis summary
-     * @returns {Promise<Object>} Send result
+     * Send query results via email.
      */
     async sendResultsEmail(options) {
         try {
-            const response = await this.client.post('/api/query/email-results', {
+            const response = await this.clients.orchestrator.post('/api/query/email-results', {
                 results: options.results,
                 originalQuery: options.originalQuery,
                 queryType: options.queryType,
@@ -450,13 +587,34 @@ class OrchestrationClient {
             });
             return response.data;
         } catch (error) {
-            console.error('Failed to send results email:', error.message);
-            return {
-                success: false,
-                error: 'EMAIL_FAILED',
-                message: error.message
-            };
+            console.error('[OrchestrationClient] sendResultsEmail error:', error.message);
+            return { success: false, error: 'EMAIL_FAILED', message: error.message };
         }
+    }
+
+    /**
+     * Health check for all services.
+     */
+    async healthCheck() {
+        const results = {
+            resourceGraph: false,
+            shortTermLA: false,
+            longTermLA: false,
+            orchestrator: false
+        };
+
+        const checks = Object.entries(this.clients).map(async ([name, client]) => {
+            if (!client) return;
+            try {
+                const response = await client.get('/health', { timeout: 5000 });
+                results[name] = response.data?.status === 'healthy';
+            } catch {
+                results[name] = false;
+            }
+        });
+
+        await Promise.all(checks);
+        return results;
     }
 }
 

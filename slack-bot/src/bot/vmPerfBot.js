@@ -340,35 +340,28 @@ class VMPerfBot extends ActivityHandler {
             return;
         }
 
-        // Check if user has subscription context
+        // v11 microservices: AI Agent can handle queries without subscription context
+        // Get subscription context if available (for scoping queries)
         const subContext = this.getSubscriptionContext(userId, channel);
 
         // Check if this looks like a known command/query
         const isKnownCommand = this.isKnownCommand(lowerText);
 
-        // If no subscription context and not a known command, try to match as subscription
-        if (!subContext && !isKnownCommand) {
-            // Try to match as a subscription selection
+        // If AI agent is available, send queries directly without requiring subscription
+        if (this.agentAvailable && isKnownCommand) {
+            console.log(`[Slack] Routing known command to AI Agent: "${cleanText}"`);
+            // Fall through to agent processing below
+        } else if (!subContext && !isKnownCommand) {
+            // Not a known command and no context - try subscription selection
             const matched = await this.handleSubscriptionSelection(cleanText, userId, channel, slackConfig);
             if (matched) {
-                return; // Subscription was selected, message already sent
+                return; // Subscription was selected
             }
-            // If not matched and multiple options shown, we're done
-            // The user will type again with a more specific name
             return;
-        }
-
-        // If no context but is a known command, try to extract subscription from prompt
-        if (!subContext && isKnownCommand) {
-            // Try to extract subscription name from the prompt
+        } else if (!subContext && isKnownCommand && !this.agentAvailable) {
+            // Known command but no agent - try to extract subscription (legacy behavior)
             const extractedSub = await this.extractAndMatchSubscription(cleanText, userId, channel, slackConfig);
-
-            if (extractedSub) {
-                // Found a matching subscription - set context and continue processing
-                console.log(`[Slack] Auto-matched subscription from prompt: ${extractedSub.subscriptionName}`);
-                // subContext is now set, fall through to process the query
-            } else {
-                // Could not extract or match subscription - ask for clarification
+            if (!extractedSub) {
                 await this.sendSlackMessage(channel,
                     ':point_up: *Please select a subscription first!*\n\n' +
                     'Type a subscription name (e.g., "Zirconium") or say "hello" to see all available subscriptions.\n\n' +
@@ -376,9 +369,10 @@ class VMPerfBot extends ActivityHandler {
                     slackConfig);
                 return;
             }
+            console.log(`[Slack] Auto-matched subscription from prompt: ${extractedSub.subscriptionName}`);
         }
 
-        // Re-get subscription context in case it was just set
+        // Get effective subscription context (may be null for agent-based queries)
         const effectiveSubContext = this.getSubscriptionContext(userId, channel);
 
         // User has subscription context - process the query
@@ -530,13 +524,14 @@ class VMPerfBot extends ActivityHandler {
                 await this.sendSlackMessage(channel,
                     `:white_check_mark: *Subscription selected: ${sub.name}*\n` +
                     `_Tenant: ${sub.tenantName}_\n\n` +
-                    '*What would you like to do?*\n' +
-                    '• "Run a performance report" - Analyze VMs in this subscription\n' +
-                    '• "Show underutilized VMs" - List VMs that can be downsized\n' +
-                    '• "Show overutilized VMs" - List VMs needing more resources\n' +
-                    '• "Investigate <vm-name>" - Get details about a specific VM\n' +
-                    '• "Show summary" - Performance overview\n' +
-                    '• "clear" - Clear subscription context',
+                    '*You can now ask me anything! Examples:*\n' +
+                    '• "List all VMs" - Show all VMs in this subscription\n' +
+                    '• "Find SQL VMs" - Search for VMs with SQL in the name\n' +
+                    '• "Show VMs with high CPU" - Find VMs with CPU above 80%\n' +
+                    '• "How many VMs are running?" - Quick count of running VMs\n' +
+                    '• "Investigate <vm-name>" - Get detailed metrics for a VM\n' +
+                    '• "Run a performance report" - Full 30-day analysis\n' +
+                    '• "clear" - Clear subscription and start fresh',
                     slackConfig);
                 return true;
             }

@@ -42,6 +42,11 @@ const config = {
     keyVaultUrl: process.env.KEY_VAULT_URL || 'https://vmperf-kv-18406.vault.azure.net',
     orchestratorUrl: process.env.ORCHESTRATOR_URL || 'http://localhost:3000',
 
+    // Microservices URLs (v11 architecture)
+    resourceGraphUrl: process.env.RESOURCE_GRAPH_SERVICE_URL || 'https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io',
+    shortTermLAUrl: process.env.SHORT_TERM_LA_SERVICE_URL || 'https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io',
+    longTermLAUrl: process.env.LONG_TERM_LA_SERVICE_URL || null, // App 3 not yet deployed
+
     // Sensitive values loaded from Key Vault at startup
     microsoftAppId: null,
     microsoftAppPassword: null,
@@ -181,12 +186,17 @@ app.get('/health', async (req, res) => {
 
     res.json({
         status: 'healthy',
-        version: '2.0.0',
+        version: 'v11-microservices',
         timestamp: new Date().toISOString(),
         keyVault: kvHealth.keyVaultAccessible ? 'connected' : 'disconnected',
         botFramework: adapter ? 'configured' : 'not configured',
         aiFoundryAgent: config.aiFoundry?.agentId ? 'configured' : 'not configured',
-        orchestratorUrl: config.orchestratorUrl,
+        services: {
+            resourceGraph: config.resourceGraphUrl || 'not configured',
+            shortTermLA: config.shortTermLAUrl || 'not configured',
+            longTermLA: config.longTermLAUrl || 'not configured',
+            legacyOrchestrator: config.orchestratorUrl
+        },
         ...botHealth
     });
 });
@@ -350,7 +360,13 @@ async function start() {
         console.log(`\nVM Performance Multi-Channel Bot started`);
         console.log(`  Port: ${config.port}`);
         console.log(`  Key Vault: ${config.keyVaultUrl}`);
-        console.log(`  Orchestrator URL: ${config.orchestratorUrl}`);
+        console.log(`  Version: v11-microservices`);
+        console.log(`\nMicroservices:`);
+        console.log(`  Resource Graph (App 1): ${config.resourceGraphUrl || 'NOT CONFIGURED'}`);
+        console.log(`  Short-Term LA (App 2): ${config.shortTermLAUrl || 'NOT CONFIGURED'}`);
+        console.log(`  Long-Term LA (App 3): ${config.longTermLAUrl || 'NOT CONFIGURED'}`);
+        console.log(`  Legacy Orchestrator: ${config.orchestratorUrl}`);
+        console.log(`\nIntegrations:`);
         console.log(`  Bot Framework: ${adapter ? 'ENABLED' : 'DISABLED'}`);
         console.log(`  AI Foundry Agent: ${config.aiFoundry?.agentId ? 'ENABLED' : 'DISABLED (fallback mode)'}`);
         console.log(`  Cosmos DB State: ${config.cosmosDb?.connectionString ? 'ENABLED' : 'IN-MEMORY'}`);

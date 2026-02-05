@@ -29,7 +29,7 @@ CONTAINER_APP_ENV_NAME="vmperf-env"
 CONTAINER_APP_NAME="vmperf-slack-bot"
 ACR_NAME="ca0bf4270c7eacr"
 IMAGE_NAME="vmperf-slack-bot"
-IMAGE_TAG="v1"
+IMAGE_TAG="v11-microservices"
 
 echo "=============================================="
 echo "VM Performance Slack Bot - Deployment"
@@ -80,23 +80,65 @@ ACR_SERVER=$(az acr show --name $ACR_NAME --query loginServer -o tsv)
 ACR_USERNAME=$(az acr credential show --name $ACR_NAME --query username -o tsv)
 ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query "passwords[0].value" -o tsv)
 
-# Step 4: Get Orchestrator URL (dynamically from deployed container app)
+# Step 4: Get Service URLs (v11 microservices architecture)
 echo ""
-echo "Step 4: Getting Orchestrator URL..."
+echo "Step 4: Getting Service URLs..."
 
+# App 1: Resource Graph Service
+RESOURCE_GRAPH_FQDN=$(az containerapp show \
+    --name vmperf-resource-graph \
+    --resource-group $RESOURCE_GROUP \
+    --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+
+if [ -n "$RESOURCE_GRAPH_FQDN" ]; then
+    RESOURCE_GRAPH_SERVICE_URL="https://$RESOURCE_GRAPH_FQDN"
+    echo "✓ Resource Graph (App 1): $RESOURCE_GRAPH_SERVICE_URL"
+else
+    echo "⚠ Resource Graph (App 1) not deployed"
+    RESOURCE_GRAPH_SERVICE_URL=""
+fi
+
+# App 2: Short-Term Log Analytics Service
+SHORT_TERM_LA_FQDN=$(az containerapp show \
+    --name vmperf-la-short \
+    --resource-group $RESOURCE_GROUP \
+    --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+
+if [ -n "$SHORT_TERM_LA_FQDN" ]; then
+    SHORT_TERM_LA_SERVICE_URL="https://$SHORT_TERM_LA_FQDN"
+    echo "✓ Short-Term LA (App 2): $SHORT_TERM_LA_SERVICE_URL"
+else
+    echo "⚠ Short-Term LA (App 2) not deployed"
+    SHORT_TERM_LA_SERVICE_URL=""
+fi
+
+# App 3: Long-Term Log Analytics Service (optional)
+LONG_TERM_LA_FQDN=$(az containerapp show \
+    --name vmperf-la-long \
+    --resource-group $RESOURCE_GROUP \
+    --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+
+if [ -n "$LONG_TERM_LA_FQDN" ]; then
+    LONG_TERM_LA_SERVICE_URL="https://$LONG_TERM_LA_FQDN"
+    echo "✓ Long-Term LA (App 3): $LONG_TERM_LA_SERVICE_URL"
+else
+    echo "⚠ Long-Term LA (App 3) not deployed"
+    LONG_TERM_LA_SERVICE_URL=""
+fi
+
+# Legacy Orchestrator (fallback)
 ORCHESTRATOR_FQDN=$(az containerapp show \
     --name vmperf-orchestrator \
     --resource-group $RESOURCE_GROUP \
     --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
 
-if [ -z "$ORCHESTRATOR_FQDN" ]; then
-    echo "ERROR: vmperf-orchestrator container app not found!"
-    echo "Please deploy the orchestrator first using deploy-orchestrator.sh"
-    exit 1
+if [ -n "$ORCHESTRATOR_FQDN" ]; then
+    ORCHESTRATOR_URL="https://$ORCHESTRATOR_FQDN"
+    echo "✓ Legacy Orchestrator: $ORCHESTRATOR_URL"
+else
+    echo "⚠ Legacy Orchestrator not deployed (some features may not work)"
+    ORCHESTRATOR_URL=""
 fi
-
-ORCHESTRATOR_URL="https://$ORCHESTRATOR_FQDN"
-echo "✓ Orchestrator URL: $ORCHESTRATOR_URL"
 
 # Step 5: Create/Update Container App
 echo ""
@@ -121,11 +163,14 @@ if [ -z "$APP_EXISTS" ]; then
         --ingress external \
         --min-replicas 1 \
         --max-replicas 3 \
-        --cpu 0.5 \
-        --memory 1Gi \
+        --cpu 1.0 \
+        --memory 2Gi \
         --env-vars \
             "KEY_VAULT_URL=https://$KEY_VAULT_NAME.vault.azure.net" \
-            "ORCHESTRATOR_URL=$ORCHESTRATOR_URL"
+            "ORCHESTRATOR_URL=$ORCHESTRATOR_URL" \
+            "RESOURCE_GRAPH_SERVICE_URL=$RESOURCE_GRAPH_SERVICE_URL" \
+            "SHORT_TERM_LA_SERVICE_URL=$SHORT_TERM_LA_SERVICE_URL" \
+            "LONG_TERM_LA_SERVICE_URL=$LONG_TERM_LA_SERVICE_URL"
     echo "✓ Container App created"
 else
     # Update existing Container App with new image and environment variables
@@ -135,7 +180,10 @@ else
         --image "$ACR_SERVER/$IMAGE_NAME:$IMAGE_TAG" \
         --set-env-vars \
             "KEY_VAULT_URL=https://$KEY_VAULT_NAME.vault.azure.net" \
-            "ORCHESTRATOR_URL=$ORCHESTRATOR_URL"
+            "ORCHESTRATOR_URL=$ORCHESTRATOR_URL" \
+            "RESOURCE_GRAPH_SERVICE_URL=$RESOURCE_GRAPH_SERVICE_URL" \
+            "SHORT_TERM_LA_SERVICE_URL=$SHORT_TERM_LA_SERVICE_URL" \
+            "LONG_TERM_LA_SERVICE_URL=$LONG_TERM_LA_SERVICE_URL"
     echo "✓ Container App updated"
 fi
 

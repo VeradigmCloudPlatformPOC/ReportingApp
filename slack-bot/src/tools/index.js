@@ -22,6 +22,10 @@ const {
     createGenerateKqlTool,
     createGenerateResourceGraphTool
 } = require('./dynamicQueryTool');
+const {
+    RIGHT_SIZING_TOOL_DEFINITION,
+    createRightSizingTool
+} = require('./rightSizingTool');
 
 /**
  * Register all tools with the agent service.
@@ -66,6 +70,13 @@ function registerAllTools(agentService, orchestrationClient, aiClient = null) {
         'get_cross_tenant_summary',
         createCrossTenantSummaryTool(orchestrationClient)
     );
+
+    // Right-Sizing Analysis Tool (v11)
+    agentService.registerToolHandler(
+        'analyze_rightsizing',
+        createRightSizingTool(orchestrationClient)
+    );
+    console.log('Right-sizing tool registered');
 
     // Dynamic Query Tools (require AI client for query generation)
     if (aiClient) {
@@ -232,7 +243,9 @@ function getToolDefinitions() {
         // Dynamic Query Tools (v9)
         DYNAMIC_QUERY_TOOL_DEFINITION,
         GENERATE_KQL_TOOL_DEFINITION,
-        GENERATE_RESOURCEGRAPH_TOOL_DEFINITION
+        GENERATE_RESOURCEGRAPH_TOOL_DEFINITION,
+        // Right-Sizing Tool (v11)
+        RIGHT_SIZING_TOOL_DEFINITION
     ];
 }
 
