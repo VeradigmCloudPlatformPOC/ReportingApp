@@ -414,76 +414,85 @@ class VMPerfBot extends ActivityHandler {
      */
     async handleSlackWelcome(channel, slackConfig, userId = null) {
         try {
-            // Send initial greeting
-            await this.sendSlackMessage(channel,
-                ':wave: *Welcome to VM Performance Bot!*\n\nLet me check which subscriptions I have access to...',
-                slackConfig);
+            // Fetch available subscriptions
+            const subscriptionsData = await this.orchestrationClient.getSubscriptions();
+            const subscriptions = subscriptionsData?.subscriptions || subscriptionsData || [];
 
-            // Fetch subscriptions across all tenants
-            const subscriptions = await this.orchestrationClient.getSubscriptions();
-
-            if (!subscriptions || subscriptions.length === 0) {
-                await this.sendSlackMessage(channel,
-                    ':warning: No subscriptions found. Please contact your administrator.',
-                    slackConfig);
-                return;
-            }
-
-            // Group subscriptions by tenant
+            // Count by tenant for summary
             const byTenant = {};
-            for (const sub of subscriptions) {
-                const tenantName = sub.tenantName || 'Unknown Tenant';
-                if (!byTenant[tenantName]) {
-                    byTenant[tenantName] = [];
-                }
-                byTenant[tenantName].push(sub);
-            }
+            subscriptions.forEach(sub => {
+                const tenant = sub.tenantName || 'Unknown Tenant';
+                if (!byTenant[tenant]) byTenant[tenant] = 0;
+                byTenant[tenant]++;
+            });
 
-            // Format subscription list by tenant
-            let subText = '*Available Subscriptions:*\n\n';
-            for (const [tenantName, tenantSubs] of Object.entries(byTenant)) {
-                subText += `:office: *${tenantName}* (${tenantSubs.length} subscriptions)\n`;
-                // Show first 5 subscriptions per tenant
-                const displaySubs = tenantSubs.slice(0, 5);
-                for (const sub of displaySubs) {
-                    subText += `   • ${sub.name}\n`;
-                }
-                if (tenantSubs.length > 5) {
-                    subText += `   _... and ${tenantSubs.length - 5} more_\n`;
-                }
-                subText += '\n';
-            }
+            // Build compact tenant summary (just counts)
+            const tenantSummary = Object.entries(byTenant)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([tenant, count]) => `• *${tenant}*: ${count} subscriptions`)
+                .join('\n');
 
-            subText += `_Total: ${subscriptions.length} subscriptions across ${Object.keys(byTenant).length} tenant(s)_\n\n`;
+            // Build welcome message with compact summary
+            const welcomeMessage = `:wave: Hey! I'm *Clark*, your CloudOps Agent.
 
-            // Check if user already has a subscription context
-            const contextKey = userId ? `${userId}_${channel}` : channel;
-            const existingContext = this.subscriptionContext.get(contextKey);
+I can help you with VM performance reports, right-sizing recommendations, and finding underutilized or overutilized VMs.
 
-            if (existingContext) {
-                subText += `:dart: *Current Context:* ${existingContext.subscriptionName}\n\n`;
-            }
+Just ask naturally - like "show underutilized VMs" or "run a performance report"
 
-            subText += ':point_right: *To get started, please select a subscription:*\n' +
-                '_Type a subscription name (or partial name) to set your context._\n' +
-                '_Example: "Zirconium" or "VEHR-Management"_\n\n' +
-                ':bulb: _After selecting a subscription, you can:_\n' +
-                '• "Run a performance report" - Analyze VMs in this subscription\n' +
-                '• "Show underutilized VMs" - List VMs that can be downsized\n' +
-                '• "Show overutilized VMs" - List VMs needing more resources\n' +
-                '• "clear" - Clear subscription context and start fresh';
+I have access to *${subscriptions.length} subscriptions* across ${Object.keys(byTenant).length} tenants:
+${tenantSummary}
 
-            await this.sendSlackMessage(channel, subText, slackConfig);
+_Say "list subscriptions" to see the full list, or just type a subscription name to set your context._`;
+
+            await this.sendSlackMessage(channel, welcomeMessage, slackConfig);
 
         } catch (error) {
             console.error('Error in welcome flow:', error);
             await this.sendSlackMessage(channel,
-                ':warning: Could not fetch subscription information.\n\n' +
-                'You can still try:\n' +
-                '• "Show underutilized VMs"\n' +
-                '• "Show overutilized VMs"\n' +
-                '• "Run a performance report"',
+                ':wave: Hey! I\'m *Clark*, your CloudOps Agent.\n\n' +
+                'Just ask me anything about your VMs - like "show underutilized VMs" or "run a performance report"',
                 slackConfig);
+        }
+    }
+
+    /**
+     * Handle "list subscriptions" command - show full subscription list.
+     */
+    async handleListSubscriptions(channel, slackConfig) {
+        try {
+            const subscriptionsData = await this.orchestrationClient.getSubscriptions();
+            const subscriptions = subscriptionsData?.subscriptions || subscriptionsData || [];
+
+            if (subscriptions.length === 0) {
+                return 'No subscriptions configured yet.';
+            }
+
+            // Group by tenant
+            const byTenant = {};
+            subscriptions.forEach(sub => {
+                const tenant = sub.tenantName || 'Unknown Tenant';
+                if (!byTenant[tenant]) byTenant[tenant] = [];
+                byTenant[tenant].push(sub.name);
+            });
+
+            // Format the full list
+            const tenantNames = Object.keys(byTenant).sort();
+            const subscriptionList = tenantNames.map(tenant => {
+                const subs = byTenant[tenant].sort();
+                return `*${tenant}*\n${subs.map(s => `  • ${s}`).join('\n')}`;
+            }).join('\n\n');
+
+            const message = `Here are all *${subscriptions.length} subscriptions* I have access to:\n\n${subscriptionList}\n\n_Type a subscription name to set your context._`;
+
+            if (channel && slackConfig) {
+                await this.sendSlackMessage(channel, message, slackConfig);
+                return null;
+            }
+            return message;
+
+        } catch (error) {
+            console.error('Error listing subscriptions:', error);
+            return 'Sorry, I had trouble fetching the subscription list. Please try again.';
         }
     }
 
@@ -690,6 +699,21 @@ class VMPerfBot extends ActivityHandler {
 
             if (!this.agentService) {
                 return this.processSlackFallbackMessage(text);
+            }
+
+            // Intercept performance report commands - bypass AI agent to ensure correct tool is called
+            // The AI agent sometimes calls get_cross_tenant_summary instead of trigger_performance_report
+            const lowerText = text.toLowerCase();
+            if ((lowerText.includes('run') || lowerText.includes('trigger') || lowerText.includes('start') || lowerText.includes('new'))
+                && (lowerText.includes('report') || lowerText.includes('analysis'))) {
+                console.log('[Agent] Intercepting performance report request - routing to handlePerformanceReport');
+                return await this.handlePerformanceReport(slackChannel, slackConfig, subContext, text);
+            }
+
+            // Handle "list subscriptions" command
+            if (lowerText.includes('list') && lowerText.includes('subscription')) {
+                console.log('[Agent] Intercepting list subscriptions request');
+                return await this.handleListSubscriptions(slackChannel, slackConfig);
             }
 
             // Get existing thread ID for multi-turn conversation
@@ -923,26 +947,25 @@ class VMPerfBot extends ActivityHandler {
             // Check if user wants to force refresh (bypass 48hr cache)
             const forceRefresh = /force|refresh|new|fresh/i.test(originalText);
 
-            // Send initial acknowledgment
+            // Send friendly acknowledgment
             if (channel && slackConfig) {
                 const scopeMsg = subContext
-                    ? `in *${subContext.subscriptionName}*`
-                    : 'across all tenants';
+                    ? `for *${subContext.subscriptionName}*`
+                    : 'across all your tenants';
                 const cacheNote = forceRefresh
-                    ? '\n:arrows_counterclockwise: _Force refresh requested - bypassing cache._'
-                    : '\n:file_cabinet: _Cached reports < 48hrs will be reused._';
+                    ? `\n_Running fresh analysis as requested._`
+                    : `\n_I'll use cached data if available from the last 48 hours._`;
                 await this.sendSlackMessage(channel,
-                    ':rocket: *Starting VM Performance Analysis*\n\n' +
-                    `:hourglass_flowing_sand: Initializing analysis ${scopeMsg}...` +
+                    `On it! Let me run a performance analysis ${scopeMsg}. :mag:\n` +
                     cacheNote +
-                    '\n_This may take 5-15 minutes depending on VM count._',
+                    `\n\n\`████░░░░░░\` Initializing...`,
                     slackConfig);
             }
 
-            // Prepare orchestration options - IMPORTANT: Include channelId for progress notifications
+            // Prepare orchestration options
             const orchestrationOptions = {
                 forceRefresh,
-                channelId: channel  // Pass channel ID so orchestrator can send progress updates
+                channelId: channel
             };
             if (subContext) {
                 orchestrationOptions.subscriptionId = subContext.subscriptionId;
@@ -950,52 +973,38 @@ class VMPerfBot extends ActivityHandler {
                 orchestrationOptions.tenantName = subContext.tenantName;
             }
 
-            // Trigger orchestration (this can take a while)
-            // The orchestrator will send progress messages directly to Slack
+            // Trigger orchestration
             const result = await this.orchestrationClient.triggerOrchestration(orchestrationOptions);
 
-            // Check if cached response (orchestrator sends its own Slack message for cache)
+            // Check if cached response
             if (result?.cached) {
-                // Orchestrator already sent a cache notification to Slack
-                // Just return null to avoid duplicate message
-                return null;
+                return null; // Orchestrator handles cached message
             }
 
-            // Check if result has runId
             const runId = result?.runId || result;
 
             if (channel && slackConfig) {
-                const contextMsg = subContext
-                    ? `_Context: ${subContext.subscriptionName}_\n\n`
-                    : '';
                 await this.sendSlackMessage(channel,
-                    `:white_check_mark: *Analysis Started Successfully!*\n\n` +
-                    contextMsg +
-                    `*Run ID:* \`${runId}\`\n\n` +
-                    ':clock1: *What happens next:*\n' +
-                    '1. Query Log Analytics for 30-day metrics\n' +
-                    '2. Analyze each VM with AI\n' +
-                    '3. Generate recommendations\n' +
-                    '4. Email reports to stakeholders\n\n' +
-                    '_While you wait, try:_\n' +
-                    '• "Show summary" - View latest analysis results\n' +
-                    '• "Show underutilized VMs" - From previous analysis',
+                    `:white_check_mark: Analysis kicked off! (Run: \`${runId}\`)\n\n` +
+                    `\`██████████\` Complete!\n\n` +
+                    `Here's what's happening:\n` +
+                    `• Pulling 30 days of metrics from Log Analytics\n` +
+                    `• Analyzing each VM for right-sizing opportunities\n` +
+                    `• Generating recommendations with AI\n` +
+                    `• Sending detailed reports to your email\n\n` +
+                    `_I'll email you the full report when it's ready. In the meantime, feel free to ask me anything else!_`,
                     slackConfig);
             }
 
-            return null; // Already sent messages
+            return null;
 
         } catch (error) {
             console.error('Performance report error:', error);
 
             if (error.message.includes('504') || error.message.includes('timeout')) {
-                // The request may have started even if we got a timeout
-                return ':hourglass: *Request is processing...*\n\n' +
-                    'The orchestration was triggered but the response timed out.\n' +
-                    'The analysis is likely still running in the background.\n\n' +
-                    '_Check back in 10-15 minutes:_\n' +
-                    '• "Show summary" - View results when ready\n' +
-                    '• Email reports will be sent when complete';
+                return `Looks like the request is taking a while, but don't worry - it's probably still running in the background. :hourglass:\n\n` +
+                    `Check back in 10-15 minutes and ask me "show summary" to see the results.\n` +
+                    `_You'll also get an email when it's done._`;
             }
 
             throw error;

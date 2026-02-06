@@ -1,6 +1,10 @@
 # Deployment Guide - VM Performance Monitoring Solution
 
-## Current Deployment (Production) - v12 Microservices Architecture
+## Current Production - v12 Microservices Architecture
+
+**Clark** - Your CloudOps Agent for VM performance monitoring, right-sizing recommendations, and cost optimization.
+
+### Azure Resources
 
 | Resource | Name | Details |
 |----------|------|---------|
@@ -10,84 +14,80 @@
 | **Key Vault** | vmperf-kv-18406 | Stores all secrets |
 | **Storage Account** | vmperfstore18406 | Tables: runs, tenants; Containers: reports, analysis-results, batch-results |
 
-### v12 Microservices
+### Microservices
 
-| Service | Container App | URL | Purpose |
-|---------|--------------|-----|---------|
-| **Slack Bot** | vmperf-slack-bot | `https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io` | User interface, smart routing |
-| **Resource Graph (App 1)** | vmperf-resource-graph | `https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io` | VM inventory, search, summary |
-| **Short-Term LA (App 2)** | vmperf-la-short | `https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io` | KQL queries ≤10 days |
-| **Long-Term LA (App 3)** | vmperf-la-long | `https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io` | Metrics collection, batch processing |
-| **Right-Sizing (App 4)** | vmperf-rightsizing | `https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io` | AI recommendations, email reports |
-| **Legacy Orchestrator** | vmperf-orchestrator | `https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io` | Reports, email delivery |
+| Service | Container App | Purpose |
+|---------|--------------|---------|
+| **Slack Bot (Clark)** | vmperf-slack-bot | User interface, AI agent, smart routing |
+| **Resource Graph (App 1)** | vmperf-resource-graph | VM inventory, search, summary |
+| **Short-Term LA (App 2)** | vmperf-la-short | KQL queries ≤10 days |
+| **Long-Term LA (App 3)** | vmperf-la-long | 30-day metrics, batch processing |
+| **Right-Sizing (App 4)** | vmperf-rightsizing | AI recommendations, email reports |
+| **Legacy Orchestrator** | vmperf-orchestrator | Reports, email delivery |
 
-### Quick Deployment Commands (v12 Microservices)
+### Service URLs
 
+```
+Slack Bot:       https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io
+Resource Graph:  https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io
+Short-Term LA:   https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io
+Long-Term LA:    https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io
+Right-Sizing:    https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io
+Orchestrator:    https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io
+```
+
+---
+
+## Quick Deployment Commands
+
+### Set Azure Subscription
 ```bash
-# Set subscription
 az account set --subscription "ffd7017b-28ed-4e90-a2ec-4a6958578f98"
+```
 
-# Build all microservices
-TIMESTAMP=$(date +%Y%m%d-%H%M)
+### Build & Deploy Slack Bot
+```bash
+cd slack-bot
+az acr build --registry ca0bf4270c7eacr --image vmperf-slack-bot:v12 .
+az containerapp update --name vmperf-slack-bot --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-slack-bot:v12
+```
 
-# App 1: Resource Graph Service
+### Build & Deploy All Microservices
+```bash
+# Resource Graph (App 1)
 cd resource-graph-service
 az acr build --registry ca0bf4270c7eacr --image vmperf-resource-graph:v12 .
+az containerapp update --name vmperf-resource-graph --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-resource-graph:v12
 
-# App 2: Short-Term Log Analytics Service
+# Short-Term LA (App 2)
 cd ../loganalytics-short-service
 az acr build --registry ca0bf4270c7eacr --image vmperf-la-short:v12 .
+az containerapp update --name vmperf-la-short --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-la-short:v12
 
-# App 3: Long-Term Log Analytics Service
+# Long-Term LA (App 3)
 cd ../loganalytics-long-service
 az acr build --registry ca0bf4270c7eacr --image vmperf-la-long:v12 .
+az containerapp update --name vmperf-la-long --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-la-long:v12
 
-# App 4: Right-Sizing Service
+# Right-Sizing (App 4)
 cd ../rightsizing-service
 az acr build --registry ca0bf4270c7eacr --image vmperf-rightsizing:v12 .
+az containerapp update --name vmperf-rightsizing --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-rightsizing:v12
 
-# Slack Bot
-cd ../slack-bot
-az acr build --registry ca0bf4270c7eacr --image vmperf-slack-bot:v12 .
-
-# Legacy Orchestrator (still needed for some features)
+# Legacy Orchestrator
 cd ../container-app
 az acr build --registry ca0bf4270c7eacr --image vmperf-orchestrator:v12 .
-
-# Deploy all microservices with new revision
-TIMESTAMP=$(date +%Y%m%d-%H%M)
-
-# Deploy App 1: Resource Graph
-az containerapp update --name vmperf-resource-graph --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-resource-graph:v12 \
-  --revision-suffix "v12-$TIMESTAMP"
-
-# Deploy App 2: Short-Term LA
-az containerapp update --name vmperf-la-short --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-la-short:v12 \
-  --revision-suffix "v12-$TIMESTAMP"
-
-# Deploy App 3: Long-Term LA
-az containerapp update --name vmperf-la-long --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-la-long:v12 \
-  --revision-suffix "v12-$TIMESTAMP"
-
-# Deploy App 4: Right-Sizing
-az containerapp update --name vmperf-rightsizing --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-rightsizing:v12 \
-  --revision-suffix "v12-$TIMESTAMP"
-
-# Deploy Slack Bot
-az containerapp update --name vmperf-slack-bot --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-slack-bot:v12 \
-  --revision-suffix "v12-$TIMESTAMP"
-
-# Deploy Legacy Orchestrator
 az containerapp update --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-orchestrator:v12 \
-  --revision-suffix "v12-$TIMESTAMP"
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-orchestrator:v12
+```
 
-# Verify health for all services
+### Health Check
+```bash
 echo "=== Health Check ==="
 curl -s https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .version
 curl -s https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .status
@@ -97,969 +97,112 @@ curl -s https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.
 curl -s https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .status
 ```
 
-### Cleanup Old Revisions
-
-Container Apps can accumulate old revisions over time. Clean them up periodically:
-
-```bash
-# List all revisions for orchestrator
-az containerapp revision list --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --query "[].{name:name, active:properties.active, created:properties.createdTime}" -o table
-
-# List all revisions for slack-bot
-az containerapp revision list --name vmperf-slack-bot --resource-group Sai-Test-rg \
-  --query "[].{name:name, active:properties.active, created:properties.createdTime}" -o table
-
-# Deactivate old revisions (replace <revision-name> with actual name)
-# Note: You cannot delete revisions, only deactivate them
-az containerapp revision deactivate --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --revision <revision-name>
-
-# Bulk deactivate all inactive revisions for orchestrator
-for rev in $(az containerapp revision list --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --query "[?properties.active==\`false\`].name" -o tsv); do
-  echo "Deactivating $rev..."
-  az containerapp revision deactivate --name vmperf-orchestrator --resource-group Sai-Test-rg --revision "$rev" 2>/dev/null || true
-done
-
-# Bulk deactivate all inactive revisions for slack-bot
-for rev in $(az containerapp revision list --name vmperf-slack-bot --resource-group Sai-Test-rg \
-  --query "[?properties.active==\`false\`].name" -o tsv); do
-  echo "Deactivating $rev..."
-  az containerapp revision deactivate --name vmperf-slack-bot --resource-group Sai-Test-rg --revision "$rev" 2>/dev/null || true
-done
-
-# Set max inactive revisions to limit accumulation (default is 100)
-az containerapp update --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --max-inactive-revisions 5
-
-az containerapp update --name vmperf-slack-bot --resource-group Sai-Test-rg \
-  --max-inactive-revisions 5
-```
-
-### Verify Active Revision
-
-Always verify the correct revision is running after deployment:
-
-```bash
-# Check which revision is currently active
-az containerapp show --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --query "properties.latestRevisionName" -o tsv
-
-az containerapp show --name vmperf-slack-bot --resource-group Sai-Test-rg \
-  --query "properties.latestRevisionName" -o tsv
-
-# Check revision creation time to confirm it's the new deployment
-az containerapp revision show --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --revision $(az containerapp show --name vmperf-orchestrator --resource-group Sai-Test-rg --query "properties.latestRevisionName" -o tsv) \
-  --query "properties.createdTime" -o tsv
-```
-
 ---
 
-## Release Management & Rollback
-
-### Git Tagging Strategy
-
-We use annotated git tags to mark stable releases. This enables quick rollback if a new deployment causes issues.
-
-**Tag Naming Convention**: `v<major>-<descriptor>` or `v<major>-fix<number>`
-- `v10-fixes` - Major feature release with fixes
-- `v10-fix2` - Incremental bug fix
-- `v10-fix3` - Another incremental bug fix
-
-### Creating a Release Tag
-
-After testing a deployment and confirming it's stable, create an annotated tag:
-
-```bash
-# Create annotated tag with release notes
-git tag -a v10-fix3 -m "Release v10-fix3 - Temperature parameter fix
-
-Changes:
-- Removed temperature parameter from Azure OpenAI API calls
-- Newer Azure OpenAI models (o1 series) only support default temperature (1)
-- Fixed BadRequestError: 400 Unsupported value: temperature does not support 0.3
-
-Deployed:
-- vmperf-orchestrator:v10-fixes (2.0 CPU / 4.0 Gi)
-- vmperf-slack-bot:v10-fix3 (1.0 CPU / 2.0 Gi)
-"
-
-# Push tag to remote repository
-git push origin v10-fix3
-```
-
-### Listing Available Tags
-
-```bash
-# List all tags with dates
-git tag -l --format='%(refname:short) - %(creatordate:short) - %(subject)'
-
-# Show details of a specific tag
-git show v10-fix3
-
-# List tags matching a pattern
-git tag -l "v10*"
-```
-
-### Rollback Procedures
-
-#### Option 1: Checkout Tag and Redeploy (Recommended)
-
-When a new deployment causes issues, rollback to a known stable tag:
-
-```bash
-# 1. Checkout the stable tag
-git checkout v10-fix3
-
-# 2. Rebuild and deploy containers from this code
-cd container-app
-az acr build --registry ca0bf4270c7eacr --image vmperf-orchestrator:v10-fix3 .
-
-cd ../slack-bot
-az acr build --registry ca0bf4270c7eacr --image vmperf-slack-bot:v10-fix3 .
-
-# 3. Update container apps to use the tagged images
-TIMESTAMP=$(date +%Y%m%d-%H%M)
-
-az containerapp update --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-orchestrator:v10-fix3 \
-  --revision-suffix "rollback-$TIMESTAMP"
-
-az containerapp update --name vmperf-slack-bot --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-slack-bot:v10-fix3 \
-  --revision-suffix "rollback-$TIMESTAMP"
-
-# 4. Verify health
-curl https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/health
-curl https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health
-
-# 5. Return to main branch for future development
-git checkout main
-```
-
-#### Option 2: Create Hotfix Branch from Tag
-
-If you need to make a small fix on top of a stable release:
-
-```bash
-# Create a branch from the stable tag
-git checkout -b hotfix/v10-fix4 v10-fix3
-
-# Make your fixes...
-# Then commit and tag the hotfix
-git commit -am "Hotfix: description of fix"
-git tag -a v10-fix4 -m "Hotfix release v10-fix4"
-git push origin hotfix/v10-fix4 --tags
-```
-
-#### Option 3: Reset Main to Tag (Emergency Only)
-
-**Warning**: This rewrites history. Only use if you need to completely abandon commits after a tag.
-
-```bash
-# Reset main branch to the stable tag
-git checkout main
-git reset --hard v10-fix3
-git push --force-with-lease origin main
-```
-
-### Current Release Tags
-
-| Tag | Date | Status | Description |
-|-----|------|--------|-------------|
-| `v12.0.0` | 2026-02-04 | ✅ Stable | Microservices architecture, reliable batch processing, managed identity |
-| `v10-fix3` | 2026-02-03 | ✅ Stable | Temperature parameter fix |
-| `v10-fix2` | 2026-02-03 | ✅ Stable | max_completion_tokens fix |
-| `v10-fixes` | 2026-02-02 | ✅ Stable | Agent verbosity, export CSV, VM name matching |
-| `v9-dynamic-queries` | 2026-01-28 | ✅ Stable | Dynamic query system |
-
-### Best Practices
-
-1. **Always tag stable releases** before deploying new changes
-2. **Use annotated tags** (`-a` flag) with descriptive messages
-3. **Test thoroughly** before tagging - tags should represent tested, working code
-4. **Document changes** in both the tag message and CHANGELOG.md
-5. **Keep images tagged** in ACR matching git tags for easy rollback
-6. **Never delete tags** that have been pushed to production
-
----
-
-## Prerequisites
-
-### 1. Azure Resources
-- Azure Subscription with appropriate permissions (Contributor or Owner)
-- Azure Container Apps Environment
-- Azure Container Registry (ACR)
-- Azure Log Analytics Workspace (per tenant)
-- Azure Key Vault for secrets
-- Azure OpenAI Service with GPT-4 deployment
-- SendGrid account for email delivery
-- Slack workspace with bot app
-
-### 2. Local Tools
-- Azure CLI (v2.50.0 or later)
-- Docker (for building container images)
-- Bash shell (for running deployment script)
-- Text editor for updating parameters
-
-### 3. Required Permissions
-- Resource Group Contributor
-- Container Apps Contributor
-- Key Vault Secrets Officer
-- Log Analytics Contributor (on each tenant workspace)
-- Role Assignment Administrator (for managed identity)
-
-## Pre-Deployment Steps
-
-### 1. Configure Azure Monitor
-Ensure VMs are sending performance metrics to Log Analytics workspace:
-
-```bash
-# Enable VM Insights on target VMs
-az monitor log-analytics workspace show \
-  --resource-group <rg-name> \
-  --workspace-name <workspace-name>
-
-# Get Workspace ID (needed for deployment)
-WORKSPACE_ID=$(az monitor log-analytics workspace show \
-  --resource-group <rg-name> \
-  --workspace-name <workspace-name> \
-  --query id -o tsv)
-```
-
-### 2. Set Up AI Foundry
-1. Create Azure AI Foundry workspace
-2. Deploy a model (GPT-4 or GPT-4-turbo recommended)
-3. Get the endpoint URL and API key:
-
-```bash
-# Example endpoint format
-https://<your-resource>.openai.azure.com/openai/deployments/<deployment-name>/chat/completions?api-version=2024-02-15-preview
-```
-
-### 3. Update Parameters File
-
-Edit `deployment/parameters.json` and update:
-
-```json
-{
-  "logAnalyticsWorkspaceId": {
-    "value": "/subscriptions/{sub-id}/resourceGroups/{rg}/providers/Microsoft.OperationalInsights/workspaces/{workspace}"
-  },
-  "aiFoundryEndpoint": {
-    "value": "https://{your-endpoint}.openai.azure.com/..."
-  },
-  "technicalEmailRecipients": {
-    "value": "devops@company.com"
-  },
-  "executiveEmailRecipients": {
-    "value": "leadership@company.com"
-  }
-}
-```
-
-For production, store the AI Foundry API key in Azure Key Vault:
-
-```bash
-# Create Key Vault
-az keyvault create \
-  --name vmperf-kv \
-  --resource-group <rg-name> \
-  --location eastus
-
-# Store API key
-az keyvault secret set \
-  --vault-name vmperf-kv \
-  --name ai-foundry-api-key \
-  --value "<your-api-key>"
-```
-
-## Container App Deployment
-
-### 1. Create Azure Container Registry
-
-```bash
-# Create ACR (or use existing: ca0bf4270c7eacr in Sai-Test-rg)
-az acr create \
-  --name ca0bf4270c7eacr \
-  --resource-group Sai-Test-rg \
-  --sku Basic \
-  --admin-enabled true
-```
-
-### 2. Build and Push Container Images
-
-```bash
-# Set correct subscription first
-az account set --subscription "ffd7017b-28ed-4e90-a2ec-4a6958578f98"
-
-# Build orchestrator
-cd container-app
-az acr build \
-  --registry ca0bf4270c7eacr \
-  --image vmperf-orchestrator:latest .
-
-# Build slack-bot
-cd ../slack-bot
-az acr build \
-  --registry ca0bf4270c7eacr \
-  --image vmperf-slack-bot:latest .
-```
-
-### 3. Create Key Vault and Secrets
-
-```bash
-# Create Key Vault
-az keyvault create \
-  --name vmperf-kv-<unique-suffix> \
-  --resource-group <rg-name> \
-  --location <location>
-
-# Add required secrets
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name LogAnalyticsWorkspaceId --value "<workspace-id>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name LogAnalyticsClientId --value "<sp-client-id>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name LogAnalyticsClientSecret --value "<sp-secret>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name LogAnalyticsTenantId --value "<default-tenant-id>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name TargetSubscriptionId --value "<default-sub-id>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name OpenAIEndpoint --value "<openai-endpoint>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name OpenAIApiKey --value "<openai-key>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name SendGridApiKey --value "<sendgrid-key>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name EmailAddress --value "<default-email>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name StorageConnectionString --value "<storage-conn-string>"
-az keyvault secret set --vault-name vmperf-kv-<suffix> --name Slack-BotToken --value "<slack-bot-token>"
-```
-
-### 4. Create Container Apps Environment
-
-```bash
-# Create environment
-az containerapp env create \
-  --name vmperf-env \
-  --resource-group <rg-name> \
-  --location <location>
-```
-
-### 5. Deploy Orchestrator Container App
-
-```bash
-az containerapp create \
-  --name vmperf-orchestrator \
-  --resource-group Sai-Test-rg \
-  --environment vmperf-env \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-orchestrator:latest \
-  --registry-server ca0bf4270c7eacr.azurecr.io \
-  --registry-username ca0bf4270c7eacr \
-  --registry-password <acr-password> \
-  --target-port 8080 \
-  --ingress external \
-  --min-replicas 1 \
-  --max-replicas 1 \
-  --cpu 1.0 \
-  --memory 2Gi \
-  --env-vars KEY_VAULT_URL=https://vmperf-kv-18406.vault.azure.net
-
-# Enable managed identity
-az containerapp identity assign \
-  --name vmperf-orchestrator \
-  --resource-group Sai-Test-rg \
-  --system-assigned
-
-# Grant Key Vault access
-ORCHESTRATOR_IDENTITY=$(az containerapp show --name vmperf-orchestrator --resource-group Sai-Test-rg --query identity.principalId -o tsv)
-az keyvault set-policy \
-  --name vmperf-kv-18406 \
-  --object-id $ORCHESTRATOR_IDENTITY \
-  --secret-permissions get list
-```
-
-### 6. Deploy Slack Bot Container App
-
-```bash
-# Get orchestrator URL (current: vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io)
-ORCHESTRATOR_URL=$(az containerapp show --name vmperf-orchestrator --resource-group Sai-Test-rg --query properties.configuration.ingress.fqdn -o tsv)
-
-az containerapp create \
-  --name vmperf-slack-bot \
-  --resource-group Sai-Test-rg \
-  --environment vmperf-env \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-slack-bot:latest \
-  --registry-server ca0bf4270c7eacr.azurecr.io \
-  --registry-username ca0bf4270c7eacr \
-  --registry-password <acr-password> \
-  --target-port 3978 \
-  --ingress external \
-  --min-replicas 1 \
-  --max-replicas 1 \
-  --cpu 0.5 \
-  --memory 1Gi \
-  --env-vars KEY_VAULT_URL=https://vmperf-kv-18406.vault.azure.net ORCHESTRATOR_URL=https://$ORCHESTRATOR_URL
-
-# Enable managed identity
-az containerapp identity assign \
-  --name vmperf-slack-bot \
-  --resource-group Sai-Test-rg \
-  --system-assigned
-
-# Grant Key Vault access
-SLACKBOT_IDENTITY=$(az containerapp show --name vmperf-slack-bot --resource-group Sai-Test-rg --query identity.principalId -o tsv)
-az keyvault set-policy \
-  --name vmperf-kv-18406 \
-  --object-id $SLACKBOT_IDENTITY \
-  --secret-permissions get list
-```
-
-### 7. Configure Multi-Tenant Storage
-
-Initialize Azure Table Storage with tenant configurations:
-
-```bash
-# Create storage tables (run once)
-az storage table create --name runs --account-name <storage-account>
-az storage table create --name tenants --account-name <storage-account>
-
-# Add tenant configurations
-# Example: VEHR tenant
-az storage entity insert \
-  --table-name tenants \
-  --account-name <storage-account> \
-  --entity \
-    PartitionKey=config \
-    RowKey=7e0ad0b6-cd3e-477a-865e-150be7298935 \
-    tenantName="VEHR / Amby" \
-    subscriptionIds='["00795996-9aef-4113-b543-3466dca3809c"]' \
-    logAnalyticsWorkspaces='["77ceef74-c36a-4ed0-b47d-fdd205d5cf4c"]' \
-    enabled=true
-```
-
----
-
-## Legacy Deployment (Logic Apps)
-
-### Option 1: Using Deployment Script (Recommended)
-
-```bash
-cd deployment
-
-# Set environment variables (optional)
-export RESOURCE_GROUP="vmperf-monitoring-rg"
-export LOCATION="eastus"
-
-# Make script executable
-chmod +x deploy.sh
-
-# Run deployment
-./deploy.sh
-```
-
-### Option 2: Manual Deployment
-
-```bash
-# Login to Azure
-az login
-
-# Create resource group
-az group create \
-  --name vmperf-monitoring-rg \
-  --location eastus
-
-# Deploy template
-az deployment group create \
-  --name vmperf-deployment \
-  --resource-group vmperf-monitoring-rg \
-  --template-file main.bicep \
-  --parameters parameters.json
-```
-
-## Post-Deployment Configuration
-
-### 1. Configure API Connections
-
-#### Office 365 Connection
-```bash
-# Get connection name
-OFFICE365_CONNECTION=$(az resource list \
-  --resource-group vmperf-monitoring-rg \
-  --resource-type Microsoft.Web/connections \
-  --query "[?contains(name, 'office365')].name" -o tsv)
-
-# Open in portal for authentication
-echo "https://portal.azure.com/#resource/subscriptions/$(az account show --query id -o tsv)/resourceGroups/vmperf-monitoring-rg/providers/Microsoft.Web/connections/$OFFICE365_CONNECTION"
-```
-
-1. Navigate to the URL above
-2. Click "Edit API connection"
-3. Click "Authorize"
-4. Sign in with Office 365 account
-5. Click "Save"
-
-#### Azure Monitor Logs Connection
-Repeat the same process for the Azure Monitor Logs connection.
-
-### 2. Update Logic App Workflow
-
-The Bicep template creates a minimal Logic App. Update it with the full workflow:
-
-```bash
-# Get Logic App name
-LOGIC_APP_NAME=$(az deployment group show \
-  --name vmperf-deployment \
-  --resource-group vmperf-monitoring-rg \
-  --query "properties.outputs.logicAppName.value" -o tsv)
-
-# Update with full definition
-az logic workflow update \
-  --resource-group vmperf-monitoring-rg \
-  --name $LOGIC_APP_NAME \
-  --definition @logic-app-definition.json
-```
-
-### 3. Configure VM Monitoring
-
-Ensure all target VMs have the following agents installed:
-- **Azure Monitor Agent** (recommended) or Log Analytics Agent
-- Performance counters configured
-
-Enable monitoring:
-
-```bash
-# For each VM or at scale using Policy
-az vm extension set \
-  --resource-group <vm-rg> \
-  --vm-name <vm-name> \
-  --name AzureMonitorWindowsAgent \
-  --publisher Microsoft.Azure.Monitor \
-  --enable-auto-upgrade true
-```
-
-### 4. Test the Solution
-
-#### Manual Test Run
-
-```bash
-# Trigger Logic App manually
-az logic workflow run trigger \
-  --resource-group vmperf-monitoring-rg \
-  --name $LOGIC_APP_NAME \
-  --trigger-name Recurrence
-```
-
-#### Verify Execution
-
-```bash
-# Check run history
-az logic workflow list-runs \
-  --resource-group vmperf-monitoring-rg \
-  --name $LOGIC_APP_NAME \
-  --query "value[0].{Status:status, StartTime:startTime, EndTime:endTime}" -o table
-```
-
-#### Test KQL Query
-
-Run the query from `src/queries/vm-metrics-query.kql` in Log Analytics:
-
-```bash
-# Get Log Analytics Workspace ID
-WORKSPACE_ID="<your-workspace-id>"
-
-# Query via CLI
-az monitor log-analytics query \
-  --workspace $WORKSPACE_ID \
-  --analytics-query @../src/queries/vm-metrics-query.kql \
-  --timespan P7D
-```
-
-## Container App Verification
-
-### Health Checks
-
-```bash
-# Check orchestrator health (current deployment)
-curl https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/health
-
-# Check slack-bot health
-curl https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health
-
-# Or dynamically get URLs
-ORCHESTRATOR_URL=$(az containerapp show --name vmperf-orchestrator --resource-group Sai-Test-rg --query properties.configuration.ingress.fqdn -o tsv)
-curl https://$ORCHESTRATOR_URL/health
-
-SLACKBOT_URL=$(az containerapp show --name vmperf-slack-bot --resource-group Sai-Test-rg --query properties.configuration.ingress.fqdn -o tsv)
-curl https://$SLACKBOT_URL/health
-```
-
-### Test Orchestration
-
-```bash
-# Trigger a test run
-curl -X POST https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/orchestrate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "subscriptionId": "<subscription-id>",
-    "tenantId": "<tenant-id>",
-    "requestedByEmail": "your-email@company.com"
-  }'
-```
-
-### View Container Logs
-
-```bash
-# Orchestrator logs
-az containerapp logs show \
-  --name vmperf-orchestrator \
-  --resource-group Sai-Test-rg \
-  --follow
-
-# Slack bot logs
-az containerapp logs show \
-  --name vmperf-slack-bot \
-  --resource-group Sai-Test-rg \
-  --follow
-```
-
-### Verification Checklist (Container Apps)
-
-- [ ] Container Registry created with images pushed
-- [ ] Key Vault created with all required secrets
-- [ ] Container Apps Environment created
-- [ ] vmperf-orchestrator deployed and healthy
-- [ ] vmperf-slack-bot deployed and healthy
-- [ ] Managed identities assigned to both apps
-- [ ] Key Vault access policies configured
-- [ ] Tenant configurations in Azure Table Storage
-- [ ] Service Principal has access to all tenant workspaces
-- [ ] Slack app configured with correct endpoint URL
-- [ ] Test orchestration completes successfully
-
-## Legacy Verification Checklist (Logic Apps)
-
-- [ ] Resource group created successfully
-- [ ] Logic App deployed and enabled
-- [ ] Storage account created with reports container
-- [ ] Office 365 connection authorized
-- [ ] Azure Monitor Logs connection authorized
-- [ ] Log Analytics workspace contains VM performance data
-- [ ] AI Foundry endpoint accessible and responding
-- [ ] Manual test run completes successfully
-- [ ] Email reports delivered to recipients
-- [ ] Reports archived in storage account
-
-## Monitoring the Solution
-
-### View Logic App Runs
-
-```bash
-# List recent runs
-az logic workflow list-runs \
-  --resource-group vmperf-monitoring-rg \
-  --name $LOGIC_APP_NAME \
-  --query "value[].{Status:status, Start:startTime, Duration:duration}" -o table
-```
-
-### Check Logs
-
-```bash
-# View diagnostic logs
-az monitor diagnostic-settings list \
-  --resource $(az logic workflow show \
-    --resource-group vmperf-monitoring-rg \
-    --name $LOGIC_APP_NAME \
-    --query id -o tsv)
-```
-
-### Cost Monitoring
-
-Approximate monthly costs:
-- Logic App: $0-50 (depends on actions)
-- AI Foundry: $10-100 (depends on model and usage)
-- Storage: $1-5
-- Log Analytics: $5-50 (depends on data ingestion)
-
-**Total estimated: $16-205/month**
-
-## Troubleshooting
-
-### Container App Issues
-
-#### Issue: 403 Forbidden from Log Analytics
-
-**Cause**: OAuth authentication using wrong tenant ID
-
-**Solution**:
-1. Verify tenant configuration in Azure Table Storage
-2. Ensure `tenantId` matches the Azure AD tenant for the target subscription
-3. Check service principal has Reader access to the workspace
-
-```bash
-# Verify tenant config
-az storage entity show \
-  --table-name tenants \
-  --account-name <storage> \
-  --partition-key config \
-  --row-key <tenant-id>
-
-# Grant SP access to workspace
-az role assignment create \
-  --assignee <sp-client-id> \
-  --role "Log Analytics Reader" \
-  --scope "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<workspace>"
-```
-
-#### Issue: Subscription Search Not Finding Results
-
-**Cause**: Search term doesn't match normalized name
-
-**Solution**: The search uses fuzzy matching. Try variations:
-- "vehr management" → "VEHR-Management" ✓
-- "vehr-management" → "VEHR-Management" ✓
-- "vehrmanagement" → "VEHR-Management" ✓
-
-#### Issue: Slack Progress Messages Not Appearing
-
-**Cause**: Missing channel ID or Slack token
-
-**Solution**:
-1. Verify `Slack-BotToken` secret exists in Key Vault
-2. Ensure bot is invited to the Slack channel
-3. Check `channelId` is being passed in orchestration request
-
-```bash
-# Verify Slack token
-az keyvault secret show \
-  --vault-name vmperf-kv-<suffix> \
-  --name Slack-BotToken
-```
-
-#### Issue: Container App Not Starting
-
-**Cause**: Missing environment variables or identity issues
-
-**Solution**:
-```bash
-# Check container logs
-az containerapp logs show \
-  --name vmperf-orchestrator \
-  --resource-group Sai-Test-rg \
-  --tail 100
-
-# Verify managed identity
-az containerapp show \
-  --name vmperf-orchestrator \
-  --resource-group Sai-Test-rg \
-  --query identity
-```
-
-#### ✅ RESOLVED: Download Links Now Available via Slack Command
-
-**Previous Issue**: Users couldn't retrieve report download links after the orchestration completed. Links only appeared in progress messages.
-
-**Fix Implemented** (January 2026):
-1. Added `/api/reports/latest/download` endpoint to orchestrator
-2. Added `getReportDownloads()` method to `orchestrationClient.js`
-3. Added "download" and "regenerate" command handlers in `vmPerfBot.js`
-
-**Current Behavior**:
-- Type "download" in Slack to get report download links
-- Type "regenerate download" or "regenerate" to get fresh 1-hour links
-- Links are valid for up to 7 days after report generation
-
-**Verification**:
-```bash
-# Test download endpoint
-curl -s "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/reports/latest/download" | jq .downloads
-```
-
----
-
-#### ✅ RESOLVED: "Show Summary" Now Shows Run Context VM Count
-
-**Previous Issue**: When user selected a subscription and typed "Show summary", the bot displayed total inventory VMs instead of the VMs analyzed in that subscription's latest run.
-
-**Fix Implemented** (January 2026):
-1. Added `/api/runs/latest/summary` endpoint to orchestrator
-2. Added `getRunSummary()` method to `orchestrationClient.js`
-3. Updated `vmPerfBot.js` to use run summary when subscription context is set
-
-**Current Behavior**:
-- With subscription context: Shows analysis results from the latest run for that subscription
-- Without subscription context: Shows cross-tenant inventory summary
-
-**Verification**:
-```bash
-# Test run summary endpoint
-curl "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/runs/latest/summary?subscriptionId=3c150c28-d2a0-4152-92b2-64774e9bcbe7" | jq .
-
-# Compare with cross-tenant summary (inventory)
-curl "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/summary" | jq .totalVMs
-```
-
----
-
-### v9 Feature: Dynamic AI-Generated Queries (February 2026)
-
-The v9 release adds support for dynamic AI-generated queries. Users can ask natural language questions and the system will:
-1. Determine query type (KQL for metrics, Resource Graph for inventory)
-2. Generate appropriate query via Azure OpenAI
-3. Validate query for security
-4. Execute and return results
-
-**Slack Commands**:
+## Clark - The CloudOps Agent
+
+### Features
+- **Conversational Interface**: Natural language queries via Slack
+- **VM Performance Reports**: 30-day analysis with AI-powered recommendations
+- **Right-Sizing**: Identifies underutilized/overutilized VMs with cost savings
+- **Multi-Tenant Support**: 107 subscriptions across 2 tenants
+- **Email Reports**: Detailed reports delivered via SendGrid
+
+### Slack Commands
 | Command | Description |
 |---------|-------------|
-| "Show VMs with high CPU" | Generates KQL query for CPU metrics |
-| "List all VMs in eastus" | Generates Resource Graph query |
-| "What VMs have memory > 80%" | Generates KQL query for memory |
+| `hello` / `hi` | Welcome message with tenant summary |
+| `list subscriptions` | Full list of available subscriptions |
+| `<subscription name>` | Set subscription context |
+| `run a performance report` | Trigger 30-day VM analysis |
+| `show underutilized VMs` | List VMs with low utilization |
+| `show overutilized VMs` | List VMs with high utilization |
+| `show summary` | Latest analysis summary |
+| `investigate <vm-name>` | Detailed metrics for a specific VM |
+| `clear` | Clear subscription context |
 
-**API Endpoints**:
-```bash
-# Execute dynamic KQL query
-curl -X POST "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/query/dynamic-kql" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Perf | where CounterName == \"% Processor Time\" | take 10"}'
-
-# Execute dynamic Resource Graph query
-curl -X POST "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/query/dynamic-resourcegraph" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Resources | where type == \"microsoft.compute/virtualmachines\" | take 10"}'
+### Example Conversation
 ```
+User: hello
+Clark: Hey! I'm Clark, your CloudOps Agent.
+       I have access to 107 subscriptions across 2 tenants:
+       • VEHR / Amby: 2 subscriptions
+       • Veradigm Production: 105 subscriptions
+       Say "list subscriptions" to see the full list...
 
-**Security Validation**:
-- Table whitelist: Only Perf, Heartbeat, AzureDiagnostics, InsightsMetrics, etc.
-- Blocks dangerous operations: .delete, .set, .drop, .alter, union *, etc.
-- Injection pattern detection
-- Comment stripping
-- Query length and result limits
+User: payerpath dev
+Clark: Subscription selected: Praseodymium - Payerpath Dev
+       Tenant: Veradigm Production
+       You can now ask me anything!
 
-**Auto-Detect Delivery**:
-- ≤50 rows: Results displayed inline in Slack
-- >50 rows: Results sent via email, summary in Slack
-
-**Required Key Vault Secrets**:
-- `OpenAIEndpoint` - Azure OpenAI endpoint URL
-- `OpenAIApiKey` - Azure OpenAI API key
-- `OpenAIDeploymentName` (optional) - Defaults to 'gpt-4'
-
-**Verification**:
-```bash
-# Test dynamic KQL endpoint
-curl -X POST "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/api/query/dynamic-kql" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Perf | take 1"}' | jq .
-
-# Check slack-bot health for OpenAI status
-curl -s "https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health" | jq .
+User: run a performance report
+Clark: On it! Let me run a performance analysis for Praseodymium - Payerpath Dev.
+       ████░░░░░░ Initializing...
+       (Analysis continues with progress updates)
 ```
 
 ---
 
-### v12 Feature: Microservices Architecture (February 2026)
+## Architecture
 
-The v12 release introduces a complete microservices architecture with 4 specialized services:
-
-**Architecture Overview**:
 ```
-Slack Bot (Smart Routing)
-    │
-    ├─► App 1: Resource Graph Service (VM inventory, search)
-    ├─► App 2: Short-Term LA Service (KQL queries ≤10 days)
-    ├─► App 3: Long-Term LA Service (30-day metrics, batch processing)
-    └─► App 4: Right-Sizing Service (AI recommendations, email reports)
-```
-
-**Key Features**:
-
-| Feature | Description |
-|---------|-------------|
-| **Reliable Batch Processing** | Azure Storage Queue for 300+ VM subscriptions |
-| **Managed Identity** | DefaultAzureCredential for storage/Key Vault access |
-| **Smart Query Routing** | Automatic routing based on time range (≤10d → App 2, >10d → App 3) |
-| **AI Right-Sizing** | Azure Advisor thresholds + AI recommendations |
-| **Dual Delivery** | Slack summary + detailed email reports |
-
-**Service URLs**:
-```bash
-# Resource Graph (App 1) - VM inventory
-https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io
-
-# Short-Term LA (App 2) - Quick KQL queries
-https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io
-
-# Long-Term LA (App 3) - Batch metrics collection
-https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io
-
-# Right-Sizing (App 4) - AI recommendations
-https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io
+┌─────────────────────────────────────────────────────────────┐
+│                    Slack (User Interface)                    │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Slack Bot (Clark) - Smart Router                │
+│  • AI Foundry Agent for natural language                     │
+│  • Command interception for performance reports              │
+│  • Subscription context management                           │
+└───────┬─────────┬─────────┬─────────┬───────────────────────┘
+        │         │         │         │
+        ▼         ▼         ▼         ▼
+┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐
+│  App 1    │ │  App 2    │ │  App 3    │ │  App 4    │
+│ Resource  │ │ Short-Term│ │ Long-Term │ │ Right-    │
+│  Graph    │ │    LA     │ │    LA     │ │  Sizing   │
+│           │ │           │ │           │ │           │
+│ • VM      │ │ • KQL     │ │ • 30-day  │ │ • AI      │
+│   inventory│ │   queries │ │   metrics │ │   analysis│
+│ • Search  │ │ • ≤10 days│ │ • Batch   │ │ • Email   │
+│ • Summary │ │           │ │   process │ │   reports │
+└───────────┘ └───────────┘ └───────────┘ └───────────┘
 ```
 
-**App 3: Reliable Batch Processing Endpoints**:
-```bash
-# Start reliable metrics collection (returns immediately with jobId)
-curl -X POST "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/collect/reliable" \
-  -H "Content-Type: application/json" \
-  -d '{"subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895", "timeRangeDays": 30}'
+---
 
-# Check job status
-curl "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/job/{jobId}"
+## Key Vault Secrets
 
-# Get completed job results
-curl "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/job/{jobId}/results"
+Required secrets in `vmperf-kv-18406`:
 
-# Get queue statistics
-curl "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/queue/stats"
-```
+| Secret Name | Purpose |
+|-------------|---------|
+| `OpenAIEndpoint` | Azure OpenAI endpoint URL |
+| `OpenAIApiKey` | Azure OpenAI API key |
+| `SendGridApiKey` | SendGrid email API key |
+| `EmailAddress` | Default sender email |
+| `StorageConnectionString` | Azure Storage connection |
+| `Slack-BotToken` | Slack bot OAuth token |
+| `Slack-SigningSecret` | Slack request verification |
+| `AIFoundry-ConnectionString` | AI Foundry project connection |
 
-**App 4: Right-Sizing Analysis Endpoints**:
-```bash
-# Full right-sizing analysis (sends email report)
-curl -X POST "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/api/rightsizing/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895",
-    "timeRangeDays": 30,
-    "userEmail": "user@example.com"
-  }'
+---
 
-# Quick preview (no email)
-curl -X POST "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/api/rightsizing/quick" \
-  -H "Content-Type: application/json" \
-  -d '{"subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895"}'
+## Managed Identity Setup
 
-# Analysis with pre-collected metrics
-curl -X POST "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/api/rightsizing/from-metrics" \
-  -H "Content-Type: application/json" \
-  -d '{"inventory": [...], "metrics": [...], "userEmail": "user@example.com"}'
-```
-
-**Environment Variables** (Slack Bot):
-```bash
-# Microservice URLs
-RESOURCE_GRAPH_SERVICE_URL=https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io
-SHORT_TERM_LA_SERVICE_URL=https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io
-LONG_TERM_LA_SERVICE_URL=https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io
-RIGHT_SIZING_SERVICE_URL=https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io
-
-# Storage (for managed identity)
-AZURE_STORAGE_ACCOUNT_NAME=vmperfstore18406
-USE_MANAGED_IDENTITY_STORAGE=true
-```
-
-**Managed Identity Setup**:
-Each Container App needs managed identity with these role assignments:
-- **Key Vault**: Secrets User role on `vmperf-kv-18406`
-- **Storage**: Storage Blob Data Contributor on `vmperfstore18406`
-- **Storage**: Storage Queue Data Contributor on `vmperfstore18406`
-- **Storage**: Storage Table Data Contributor on `vmperfstore18406`
+Each Container App uses system-assigned managed identity:
 
 ```bash
-# Assign managed identity to container app
+# Assign managed identity
 az containerapp identity assign \
-  --name vmperf-la-long \
+  --name <app-name> \
   --resource-group Sai-Test-rg \
   --system-assigned
 
 # Get principal ID
-PRINCIPAL_ID=$(az containerapp show --name vmperf-la-long --resource-group Sai-Test-rg --query identity.principalId -o tsv)
+PRINCIPAL_ID=$(az containerapp show --name <app-name> --resource-group Sai-Test-rg --query identity.principalId -o tsv)
 
 # Grant Key Vault access
 az keyvault set-policy \
@@ -1067,135 +210,119 @@ az keyvault set-policy \
   --object-id $PRINCIPAL_ID \
   --secret-permissions get list
 
-# Grant Storage Blob access
+# Grant Storage access (for App 3)
 az role assignment create \
   --assignee $PRINCIPAL_ID \
   --role "Storage Blob Data Contributor" \
   --scope "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/resourceGroups/Sai-Test-rg/providers/Microsoft.Storage/storageAccounts/vmperfstore18406"
 
-# Grant Storage Queue access
 az role assignment create \
   --assignee $PRINCIPAL_ID \
   --role "Storage Queue Data Contributor" \
   --scope "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/resourceGroups/Sai-Test-rg/providers/Microsoft.Storage/storageAccounts/vmperfstore18406"
 ```
 
-**Verification**:
+---
+
+## Environment Variables
+
+### Slack Bot
 ```bash
-# Test all microservices
-echo "=== v12 Microservices Health Check ==="
+KEY_VAULT_URL=https://vmperf-kv-18406.vault.azure.net
+ORCHESTRATOR_URL=https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io
+RESOURCE_GRAPH_SERVICE_URL=https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io
+SHORT_TERM_LA_SERVICE_URL=https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io
+LONG_TERM_LA_SERVICE_URL=https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io
+```
 
-# Slack Bot
-curl -s "https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health" | jq '{version, services}'
-
-# App 1: Resource Graph
-curl -s "https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io/health"
-
-# App 2: Short-Term LA
-curl -s "https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io/health"
-
-# App 3: Long-Term LA
-curl -s "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/health"
-
-# App 4: Right-Sizing
-curl -s "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/health"
-
-# Test batch processing for 340 VMs
-curl -X POST "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/collect/reliable" \
-  -H "Content-Type: application/json" \
-  -d '{"subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895", "timeRangeDays": 30}'
+### Microservices (App 1-4)
+```bash
+KEY_VAULT_URL=https://vmperf-kv-18406.vault.azure.net
+AZURE_STORAGE_ACCOUNT_NAME=vmperfstore18406
+USE_MANAGED_IDENTITY_STORAGE=true
 ```
 
 ---
 
-### Legacy Issues
+## API Endpoints
 
-### Issue: No VMs in Report
-
-**Cause**: VMs not sending metrics to Log Analytics
-
-**Solution**:
+### App 3: Long-Term LA (Batch Processing)
 ```bash
-# Verify VM monitoring is enabled
-az vm list --query "[].{Name:name, RG:resourceGroup}" -o table
+# Start reliable metrics collection
+POST /api/metrics/collect/reliable
+{ "subscriptionId": "...", "timeRangeDays": 30 }
 
-# Check each VM for monitoring extension
-az vm extension list \
-  --resource-group <vm-rg> \
-  --vm-name <vm-name> \
-  --query "[?contains(name, 'Monitor')]" -o table
+# Check job status
+GET /api/metrics/job/{jobId}
+
+# Get completed results
+GET /api/metrics/job/{jobId}/results
 ```
 
-### Issue: Logic App Fails with Authentication Error
-
-**Cause**: API connections not authorized
-
-**Solution**: Re-authorize connections in Azure Portal
-
-### Issue: AI Foundry Returns Errors
-
-**Cause**: Invalid endpoint or API key
-
-**Solution**:
+### App 4: Right-Sizing
 ```bash
-# Test endpoint manually
-curl -X POST \
-  "<ai-foundry-endpoint>" \
-  -H "Content-Type: application/json" \
-  -H "api-key: <your-key>" \
-  -d '{"messages":[{"role":"user","content":"test"}],"max_tokens":10}'
+# Full analysis with email
+POST /api/rightsizing/analyze
+{ "subscriptionId": "...", "timeRangeDays": 30, "userEmail": "..." }
+
+# Quick preview (no email)
+POST /api/rightsizing/quick
+{ "subscriptionId": "..." }
 ```
 
-### Issue: Empty Email Reports
+---
 
-**Cause**: KQL query returns no results
+## Revision Management
 
-**Solution**: Check date range and performance counter configuration in Log Analytics
-
-## Maintenance
-
-### Update AI Prompts
-
-1. Edit prompts in `src/prompts/`
-2. Update Logic App workflow to use new prompts
-3. Test with manual run
-
-### Modify Schedule
-
+### Check Active Revision
 ```bash
-# Update recurrence schedule
-az logic workflow update \
-  --resource-group vmperf-monitoring-rg \
-  --name $LOGIC_APP_NAME \
-  --set "definition.triggers.Recurrence.recurrence.schedule.weekDays=['Wednesday']"
+az containerapp revision list --name vmperf-slack-bot --resource-group Sai-Test-rg \
+  --query "[0:3].{name:name, trafficWeight:properties.trafficWeight, state:properties.runningState}" -o table
 ```
 
-### Update Email Recipients
-
+### Cleanup Old Revisions
 ```bash
-# Update parameters
-az logic workflow update \
-  --resource-group vmperf-monitoring-rg \
-  --name $LOGIC_APP_NAME \
-  --set "definition.parameters.technicalEmailRecipients.defaultValue='new-email@company.com'"
+# Set max inactive revisions
+az containerapp update --name vmperf-slack-bot --resource-group Sai-Test-rg \
+  --max-inactive-revisions 5
 ```
 
-## Cleanup
+---
 
-To remove all deployed resources:
+## Troubleshooting
 
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| Bot not responding | Check revision status: `az containerapp revision list` |
+| "No subscriptions" | Verify orchestrator health and Key Vault access |
+| Reports not sending | Check SendGrid API key in Key Vault |
+| Slow performance report | Large subscription - check App 3 batch queue |
+
+### View Logs
 ```bash
-# Delete resource group (removes all resources)
-az group delete \
-  --name vmperf-monitoring-rg \
-  --yes \
-  --no-wait
+az containerapp logs show --name vmperf-slack-bot --resource-group Sai-Test-rg --follow
 ```
+
+### Health Endpoints
+All services expose `/health` for monitoring.
+
+---
+
+## Release History
+
+| Version | Date | Description |
+|---------|------|-------------|
+| `v12-fix3` | 2026-02-05 | Clark persona, compact welcome, human-like responses |
+| `v12.0.0` | 2026-02-04 | Microservices architecture, reliable batch processing |
+
+---
 
 ## Support
 
-For issues or questions:
-1. Check Azure Logic App run history for detailed error messages
-2. Review Log Analytics workspace for data availability
-3. Verify AI Foundry endpoint and quota
-4. Contact your Azure administrator for permissions issues
+For issues:
+1. Check container app logs
+2. Verify Key Vault secrets
+3. Test health endpoints
+4. Review AI Foundry agent status
