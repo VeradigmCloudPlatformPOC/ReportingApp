@@ -7,7 +7,7 @@
  * - App 3: Long-Term Log Analytics + AI (queries >10 days, reports)
  * - Legacy: Old orchestrator (for features not yet migrated)
  *
- * @version v11-microservices
+ * @version v12-microservices
  * @author VM Performance Monitoring Team
  */
 
@@ -271,10 +271,25 @@ class OrchestrationClient {
                 return response.data;
             }
 
-            // Route to App 3 for long queries (>10 days) - if available
+            // Route to App 3 for long queries (>10 days)
             if (this.clients.longTermLA) {
-                // TODO: Implement when App 3 is ready
-                console.log('[OrchestrationClient] Long-term query - routing to App 3 (not yet implemented)');
+                console.log(`[OrchestrationClient] Long-term query (${queryDays} days) - routing to App 3`);
+                const response = await this.clients.longTermLA.post('/api/query/kql', {
+                    query,
+                    options: {
+                        tenantId: options.tenantId,
+                        subscriptionId: options.subscriptionId,
+                        workspaceId: options.workspaceId,
+                        maxResults: options.maxResults || 1000
+                    },
+                    format: 'json'
+                }, {
+                    headers: {
+                        'X-User-Id': options.userId || 'unknown',
+                        'X-Channel': options.channel || 'slack'
+                    }
+                });
+                return response.data;
             }
 
             // Fallback to legacy orchestrator
@@ -390,6 +405,114 @@ class OrchestrationClient {
         } catch (error) {
             console.error('[OrchestrationClient] validateKqlQuery error:', error.message);
             return { valid: false, errors: [error.message], warnings: [] };
+        }
+    }
+
+    // =========================================================================
+    // APP 3: LONG-TERM LOG ANALYTICS SERVICE (v12 - reliable batch processing)
+    // =========================================================================
+
+    /**
+     * Start reliable metrics collection for a subscription.
+     * Uses Azure Storage Queue for batch processing.
+     * Routes to: App 3 (Long-Term LA Service)
+     */
+    async collectMetricsReliable(options = {}) {
+        try {
+            if (!this.clients.longTermLA) {
+                return { success: false, error: 'Long-Term LA service not configured' };
+            }
+
+            console.log(`[OrchestrationClient] Starting reliable metrics collection for subscription: ${options.subscriptionId}`);
+            const response = await this.clients.longTermLA.post('/api/metrics/collect/reliable', {
+                subscriptionId: options.subscriptionId,
+                tenantId: options.tenantId,
+                timeRangeDays: options.timeRangeDays || 30
+            }, {
+                timeout: 60000 // 1 minute to start the job
+            });
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] collectMetricsReliable error:', error.message);
+            return {
+                success: false,
+                error: 'COLLECTION_FAILED',
+                message: error.response?.data?.message || error.message
+            };
+        }
+    }
+
+    /**
+     * Get status of a reliable metrics collection job.
+     * Routes to: App 3 (Long-Term LA Service)
+     */
+    async getMetricsJobStatus(jobId) {
+        try {
+            if (!this.clients.longTermLA) {
+                return { success: false, error: 'Long-Term LA service not configured' };
+            }
+
+            const response = await this.clients.longTermLA.get(`/api/metrics/job/${jobId}`);
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] getMetricsJobStatus error:', error.message);
+            return {
+                success: false,
+                error: 'STATUS_ERROR',
+                message: error.message
+            };
+        }
+    }
+
+    /**
+     * Get results of a completed reliable metrics collection job.
+     * Routes to: App 3 (Long-Term LA Service)
+     */
+    async getMetricsJobResults(jobId) {
+        try {
+            if (!this.clients.longTermLA) {
+                return { success: false, error: 'Long-Term LA service not configured' };
+            }
+
+            const response = await this.clients.longTermLA.get(`/api/metrics/job/${jobId}/results`);
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] getMetricsJobResults error:', error.message);
+            return {
+                success: false,
+                error: 'RESULTS_ERROR',
+                message: error.message
+            };
+        }
+    }
+
+    /**
+     * Collect metrics synchronously (legacy, for smaller subscriptions).
+     * Routes to: App 3 (Long-Term LA Service)
+     */
+    async collectMetrics(options = {}) {
+        try {
+            if (!this.clients.longTermLA) {
+                return { success: false, error: 'Long-Term LA service not configured' };
+            }
+
+            console.log(`[OrchestrationClient] Collecting metrics for subscription: ${options.subscriptionId}`);
+            const response = await this.clients.longTermLA.post('/api/metrics/collect', {
+                subscriptionId: options.subscriptionId,
+                tenantId: options.tenantId,
+                timeRangeDays: options.timeRangeDays || 30,
+                maxVMs: options.maxVMs
+            }, {
+                timeout: 300000 // 5 minutes for sync collection
+            });
+            return response.data;
+        } catch (error) {
+            console.error('[OrchestrationClient] collectMetrics error:', error.message);
+            return {
+                success: false,
+                error: 'COLLECTION_FAILED',
+                message: error.response?.data?.message || error.message
+            };
         }
     }
 

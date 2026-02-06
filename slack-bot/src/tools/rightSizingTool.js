@@ -5,7 +5,7 @@
  * Calls App 4 (Right-Sizing Service) to analyze VMs and generate
  * AI-powered recommendations with Slack summary + email report.
  *
- * @version v11-microservices
+ * @version v12-microservices
  */
 
 const axios = require('axios');

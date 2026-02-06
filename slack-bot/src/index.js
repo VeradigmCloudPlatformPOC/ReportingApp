@@ -42,10 +42,10 @@ const config = {
     keyVaultUrl: process.env.KEY_VAULT_URL || 'https://vmperf-kv-18406.vault.azure.net',
     orchestratorUrl: process.env.ORCHESTRATOR_URL || 'http://localhost:3000',
 
-    // Microservices URLs (v11 architecture)
+    // Microservices URLs (v12 architecture)
     resourceGraphUrl: process.env.RESOURCE_GRAPH_SERVICE_URL || 'https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io',
     shortTermLAUrl: process.env.SHORT_TERM_LA_SERVICE_URL || 'https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io',
-    longTermLAUrl: process.env.LONG_TERM_LA_SERVICE_URL || null, // App 3 not yet deployed
+    longTermLAUrl: process.env.LONG_TERM_LA_SERVICE_URL || 'https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io',
 
     // Sensitive values loaded from Key Vault at startup
     microsoftAppId: null,
@@ -186,7 +186,7 @@ app.get('/health', async (req, res) => {
 
     res.json({
         status: 'healthy',
-        version: 'v11-microservices',
+        version: 'v12-microservices',
         timestamp: new Date().toISOString(),
         keyVault: kvHealth.keyVaultAccessible ? 'connected' : 'disconnected',
         botFramework: adapter ? 'configured' : 'not configured',
@@ -360,7 +360,7 @@ async function start() {
         console.log(`\nVM Performance Multi-Channel Bot started`);
         console.log(`  Port: ${config.port}`);
         console.log(`  Key Vault: ${config.keyVaultUrl}`);
-        console.log(`  Version: v11-microservices`);
+        console.log(`  Version: v12-microservices`);
         console.log(`\nMicroservices:`);
         console.log(`  Resource Graph (App 1): ${config.resourceGraphUrl || 'NOT CONFIGURED'}`);
         console.log(`  Short-Term LA (App 2): ${config.shortTermLAUrl || 'NOT CONFIGURED'}`);

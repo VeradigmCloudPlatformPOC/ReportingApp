@@ -1,46 +1,100 @@
 # Deployment Guide - VM Performance Monitoring Solution
 
-## Current Deployment (Production)
+## Current Deployment (Production) - v12 Microservices Architecture
 
 | Resource | Name | Details |
 |----------|------|---------|
 | **Subscription** | Zirconium - Veradigm Sandbox | `ffd7017b-28ed-4e90-a2ec-4a6958578f98` |
 | **Resource Group** | Sai-Test-rg | West US 2 |
 | **Container Registry** | ca0bf4270c7eacr | `ca0bf4270c7eacr.azurecr.io` |
-| **Orchestrator App** | vmperf-orchestrator | `https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io` |
-| **Slack Bot App** | vmperf-slack-bot | `https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io` |
 | **Key Vault** | vmperf-kv-18406 | Stores all secrets |
-| **Storage Account** | saitestrg88fe | Tables: runs, tenants; Containers: reports, analysis-results |
+| **Storage Account** | vmperfstore18406 | Tables: runs, tenants; Containers: reports, analysis-results, batch-results |
 
-### Quick Deployment Commands
+### v12 Microservices
+
+| Service | Container App | URL | Purpose |
+|---------|--------------|-----|---------|
+| **Slack Bot** | vmperf-slack-bot | `https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io` | User interface, smart routing |
+| **Resource Graph (App 1)** | vmperf-resource-graph | `https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io` | VM inventory, search, summary |
+| **Short-Term LA (App 2)** | vmperf-la-short | `https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io` | KQL queries ≤10 days |
+| **Long-Term LA (App 3)** | vmperf-la-long | `https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io` | Metrics collection, batch processing |
+| **Right-Sizing (App 4)** | vmperf-rightsizing | `https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io` | AI recommendations, email reports |
+| **Legacy Orchestrator** | vmperf-orchestrator | `https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io` | Reports, email delivery |
+
+### Quick Deployment Commands (v12 Microservices)
 
 ```bash
 # Set subscription
 az account set --subscription "ffd7017b-28ed-4e90-a2ec-4a6958578f98"
 
-# Build and deploy orchestrator
-cd container-app
-az acr build --registry ca0bf4270c7eacr --image vmperf-orchestrator:latest .
-
-# Build and deploy slack-bot
-cd ../slack-bot
-az acr build --registry ca0bf4270c7eacr --image vmperf-slack-bot:latest .
-
-# IMPORTANT: Force new revision with unique suffix to ensure new code is deployed
-# Using --revision-suffix ensures a new revision is created and activated
+# Build all microservices
 TIMESTAMP=$(date +%Y%m%d-%H%M)
 
-az containerapp update --name vmperf-orchestrator --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-orchestrator:latest \
-  --revision-suffix "v-$TIMESTAMP"
+# App 1: Resource Graph Service
+cd resource-graph-service
+az acr build --registry ca0bf4270c7eacr --image vmperf-resource-graph:v12 .
 
+# App 2: Short-Term Log Analytics Service
+cd ../loganalytics-short-service
+az acr build --registry ca0bf4270c7eacr --image vmperf-la-short:v12 .
+
+# App 3: Long-Term Log Analytics Service
+cd ../loganalytics-long-service
+az acr build --registry ca0bf4270c7eacr --image vmperf-la-long:v12 .
+
+# App 4: Right-Sizing Service
+cd ../rightsizing-service
+az acr build --registry ca0bf4270c7eacr --image vmperf-rightsizing:v12 .
+
+# Slack Bot
+cd ../slack-bot
+az acr build --registry ca0bf4270c7eacr --image vmperf-slack-bot:v12 .
+
+# Legacy Orchestrator (still needed for some features)
+cd ../container-app
+az acr build --registry ca0bf4270c7eacr --image vmperf-orchestrator:v12 .
+
+# Deploy all microservices with new revision
+TIMESTAMP=$(date +%Y%m%d-%H%M)
+
+# Deploy App 1: Resource Graph
+az containerapp update --name vmperf-resource-graph --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-resource-graph:v12 \
+  --revision-suffix "v12-$TIMESTAMP"
+
+# Deploy App 2: Short-Term LA
+az containerapp update --name vmperf-la-short --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-la-short:v12 \
+  --revision-suffix "v12-$TIMESTAMP"
+
+# Deploy App 3: Long-Term LA
+az containerapp update --name vmperf-la-long --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-la-long:v12 \
+  --revision-suffix "v12-$TIMESTAMP"
+
+# Deploy App 4: Right-Sizing
+az containerapp update --name vmperf-rightsizing --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-rightsizing:v12 \
+  --revision-suffix "v12-$TIMESTAMP"
+
+# Deploy Slack Bot
 az containerapp update --name vmperf-slack-bot --resource-group Sai-Test-rg \
-  --image ca0bf4270c7eacr.azurecr.io/vmperf-slack-bot:latest \
-  --revision-suffix "v-$TIMESTAMP"
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-slack-bot:v12 \
+  --revision-suffix "v12-$TIMESTAMP"
 
-# Verify health
-curl https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/health
-curl https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health
+# Deploy Legacy Orchestrator
+az containerapp update --name vmperf-orchestrator --resource-group Sai-Test-rg \
+  --image ca0bf4270c7eacr.azurecr.io/vmperf-orchestrator:v12 \
+  --revision-suffix "v12-$TIMESTAMP"
+
+# Verify health for all services
+echo "=== Health Check ==="
+curl -s https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .version
+curl -s https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .status
+curl -s https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .status
+curl -s https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .status
+curl -s https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .status
+curl -s https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontainerapps.io/health | jq .status
 ```
 
 ### Cleanup Old Revisions
@@ -215,6 +269,7 @@ git push --force-with-lease origin main
 
 | Tag | Date | Status | Description |
 |-----|------|--------|-------------|
+| `v12.0.0` | 2026-02-04 | ✅ Stable | Microservices architecture, reliable batch processing, managed identity |
 | `v10-fix3` | 2026-02-03 | ✅ Stable | Temperature parameter fix |
 | `v10-fix2` | 2026-02-03 | ✅ Stable | max_completion_tokens fix |
 | `v10-fixes` | 2026-02-02 | ✅ Stable | Agent verbosity, export CSV, VM name matching |
@@ -894,6 +949,161 @@ curl -X POST "https://vmperf-orchestrator.calmsand-17418731.westus2.azurecontain
 
 # Check slack-bot health for OpenAI status
 curl -s "https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health" | jq .
+```
+
+---
+
+### v12 Feature: Microservices Architecture (February 2026)
+
+The v12 release introduces a complete microservices architecture with 4 specialized services:
+
+**Architecture Overview**:
+```
+Slack Bot (Smart Routing)
+    │
+    ├─► App 1: Resource Graph Service (VM inventory, search)
+    ├─► App 2: Short-Term LA Service (KQL queries ≤10 days)
+    ├─► App 3: Long-Term LA Service (30-day metrics, batch processing)
+    └─► App 4: Right-Sizing Service (AI recommendations, email reports)
+```
+
+**Key Features**:
+
+| Feature | Description |
+|---------|-------------|
+| **Reliable Batch Processing** | Azure Storage Queue for 300+ VM subscriptions |
+| **Managed Identity** | DefaultAzureCredential for storage/Key Vault access |
+| **Smart Query Routing** | Automatic routing based on time range (≤10d → App 2, >10d → App 3) |
+| **AI Right-Sizing** | Azure Advisor thresholds + AI recommendations |
+| **Dual Delivery** | Slack summary + detailed email reports |
+
+**Service URLs**:
+```bash
+# Resource Graph (App 1) - VM inventory
+https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io
+
+# Short-Term LA (App 2) - Quick KQL queries
+https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io
+
+# Long-Term LA (App 3) - Batch metrics collection
+https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io
+
+# Right-Sizing (App 4) - AI recommendations
+https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io
+```
+
+**App 3: Reliable Batch Processing Endpoints**:
+```bash
+# Start reliable metrics collection (returns immediately with jobId)
+curl -X POST "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/collect/reliable" \
+  -H "Content-Type: application/json" \
+  -d '{"subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895", "timeRangeDays": 30}'
+
+# Check job status
+curl "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/job/{jobId}"
+
+# Get completed job results
+curl "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/job/{jobId}/results"
+
+# Get queue statistics
+curl "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/queue/stats"
+```
+
+**App 4: Right-Sizing Analysis Endpoints**:
+```bash
+# Full right-sizing analysis (sends email report)
+curl -X POST "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/api/rightsizing/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895",
+    "timeRangeDays": 30,
+    "userEmail": "user@example.com"
+  }'
+
+# Quick preview (no email)
+curl -X POST "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/api/rightsizing/quick" \
+  -H "Content-Type: application/json" \
+  -d '{"subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895"}'
+
+# Analysis with pre-collected metrics
+curl -X POST "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/api/rightsizing/from-metrics" \
+  -H "Content-Type: application/json" \
+  -d '{"inventory": [...], "metrics": [...], "userEmail": "user@example.com"}'
+```
+
+**Environment Variables** (Slack Bot):
+```bash
+# Microservice URLs
+RESOURCE_GRAPH_SERVICE_URL=https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io
+SHORT_TERM_LA_SERVICE_URL=https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io
+LONG_TERM_LA_SERVICE_URL=https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io
+RIGHT_SIZING_SERVICE_URL=https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io
+
+# Storage (for managed identity)
+AZURE_STORAGE_ACCOUNT_NAME=vmperfstore18406
+USE_MANAGED_IDENTITY_STORAGE=true
+```
+
+**Managed Identity Setup**:
+Each Container App needs managed identity with these role assignments:
+- **Key Vault**: Secrets User role on `vmperf-kv-18406`
+- **Storage**: Storage Blob Data Contributor on `vmperfstore18406`
+- **Storage**: Storage Queue Data Contributor on `vmperfstore18406`
+- **Storage**: Storage Table Data Contributor on `vmperfstore18406`
+
+```bash
+# Assign managed identity to container app
+az containerapp identity assign \
+  --name vmperf-la-long \
+  --resource-group Sai-Test-rg \
+  --system-assigned
+
+# Get principal ID
+PRINCIPAL_ID=$(az containerapp show --name vmperf-la-long --resource-group Sai-Test-rg --query identity.principalId -o tsv)
+
+# Grant Key Vault access
+az keyvault set-policy \
+  --name vmperf-kv-18406 \
+  --object-id $PRINCIPAL_ID \
+  --secret-permissions get list
+
+# Grant Storage Blob access
+az role assignment create \
+  --assignee $PRINCIPAL_ID \
+  --role "Storage Blob Data Contributor" \
+  --scope "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/resourceGroups/Sai-Test-rg/providers/Microsoft.Storage/storageAccounts/vmperfstore18406"
+
+# Grant Storage Queue access
+az role assignment create \
+  --assignee $PRINCIPAL_ID \
+  --role "Storage Queue Data Contributor" \
+  --scope "/subscriptions/ffd7017b-28ed-4e90-a2ec-4a6958578f98/resourceGroups/Sai-Test-rg/providers/Microsoft.Storage/storageAccounts/vmperfstore18406"
+```
+
+**Verification**:
+```bash
+# Test all microservices
+echo "=== v12 Microservices Health Check ==="
+
+# Slack Bot
+curl -s "https://vmperf-slack-bot.calmsand-17418731.westus2.azurecontainerapps.io/health" | jq '{version, services}'
+
+# App 1: Resource Graph
+curl -s "https://vmperf-resource-graph.calmsand-17418731.westus2.azurecontainerapps.io/health"
+
+# App 2: Short-Term LA
+curl -s "https://vmperf-la-short.calmsand-17418731.westus2.azurecontainerapps.io/health"
+
+# App 3: Long-Term LA
+curl -s "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/health"
+
+# App 4: Right-Sizing
+curl -s "https://vmperf-rightsizing.calmsand-17418731.westus2.azurecontainerapps.io/health"
+
+# Test batch processing for 340 VMs
+curl -X POST "https://vmperf-la-long.calmsand-17418731.westus2.azurecontainerapps.io/api/metrics/collect/reliable" \
+  -H "Content-Type: application/json" \
+  -d '{"subscriptionId": "45cc9718-d2ec-48c8-b490-df358d934895", "timeRangeDays": 30}'
 ```
 
 ---

@@ -5,7 +5,7 @@
  * Tools are functions that the AI agent can call to interact
  * with the VM Performance orchestrator APIs.
  *
- * @version v9-dynamic-queries
+ * @version v12-microservices
  */
 
 const createTriggerReportTool = require('./triggerReportTool');
